@@ -3,7 +3,7 @@ from datetime import time
 from common import Creneau
 
 class Constraints:
-    def __init__(self, plages_interdites : List[Creneau] = None, temp_minimale = 10.0):
+    def __init__(self, plages_interdites : List[Creneau] = None, temp_minimale = 10.0, puissance_maison: float = 0.0):
         # On stocke les plages INTERDITES
         # Par défaut vide = Aucune interdiction = 24/24 Autorisé
         if plages_interdites is None :
@@ -11,7 +11,7 @@ class Constraints:
         else :
             self.plages_interdites = plages_interdites
         self.temperature_minimale = temp_minimale 
-
+        self.puissance_maison = puissance_maison 
     # --- MÉTHODE PRIVÉE DE VALIDATION  ---
     def _valider_coherence(self, liste_plages: List[Creneau]):
         """
@@ -68,6 +68,18 @@ class Constraints:
             raise ValueError("La température minimale doit être un nombre entre 0 et 95") 
         self._temperature_minimale = valeur 
 
+    @property
+    def puissance_maison(self) -> float:
+        return self._puissance_maison
+
+    @puissance_maison.setter
+    def puissance_maison(self, valeur):
+        if not isinstance(valeur, (int, float)):
+            raise TypeError("La puissance maison doit être un nombre (en Watts)")
+        if valeur < 0:
+            raise ValueError("La puissance maison ne peut pas être négative")
+        self._puissance_maison = float(valeur)
+  
     # --- HELPER D'AJOUT ---
 
     def ajouter_interdit(self, debut: time, fin: time):
