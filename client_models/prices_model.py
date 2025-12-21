@@ -7,13 +7,13 @@ class ModeIncompatibleError(Exception):
     pass
 
 class Prices:
-    def __init__(self):
+    def __init__(self, mode="BASE", hp=0.22, hc=0.18, base=0.20, revente=0.10):
         # Valeurs par défaut
-        self._hp = 0.22 
-        self._hc = 0.18 
-        self._base = 0.20
-        self._revente = 0.10 
-        self._mode = "BASE" # On initialise un mode par défaut pour éviter les bugs
+        self._hp = hp
+        self._hc = hc
+        self._base = base
+        self._revente = revente
+        self._mode = mode # On initialise un mode par défaut pour éviter les bugs
         self._creneaux_hp = [] 
 
     # Méthode pour vérifier si on est bien dans le mode attendu. 
