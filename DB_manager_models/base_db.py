@@ -52,8 +52,7 @@ class Database:
             print(f"Connecté à la base de données: {self.chemin_db}")
             return True
         except sqlite3.Error as e:
-            print(f"Erreur de connexion: {e}")
-            return False
+            raise
         
     def close_db(self):
         """Fermer la connexion à la base de données"""
@@ -61,7 +60,7 @@ class Database:
             self.connexion.close()
             print("Connexion fermée")
     
-    def create_all_tables(self):
+    def create_all_tables(self, data_initial_wanted=True):
         """Créer le schéma de la base de données"""
         
         # 1. Table clients
@@ -86,26 +85,19 @@ class Database:
         self.create_table_plages_interdites()
         
         # 8. Insérer les données initiales
-        self.insert_initial_data()
+        if data_initial_wanted:
+            self.insert_initial_data()
         
         # 9. Créer les index
         self.create_index()
         
-        print("\nToutes les tables ont été créées avec succès!")
-    
+        print("\nToutes les tables ont été créés avec succès!")
+
     def create_table_clients(self):
         """Créer la table basée sur le fichier client_models/client.py et client_models/features_models.py"""
         sql = """
         CREATE TABLE IF NOT EXISTS clients (
             client_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nom TEXT,
-            email TEXT,
-            latitude REAL,
-            longitude REAL,
-            tilt REAL,
-            azimuth REAL,
-            router_id TEXT,
-            pwd TEXT,
             gradation INTEGER DEFAULT 0,
             mode TEXT DEFAULT 'AutoCons',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -115,7 +107,31 @@ class Database:
         );
         """
         self.connexion.execute(sql)
-        print("Table 'clients' créée")
+        print("Table 'clients' créé")
+    
+    # def create_table_clients(self):
+    #     """Créer la table basée sur le fichier client_models/client.py et client_models/features_models.py"""
+    #     sql = """
+    #     CREATE TABLE IF NOT EXISTS clients (
+    #         client_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    #         nom TEXT,
+    #         email TEXT,
+    #         latitude REAL,
+    #         longitude REAL,
+    #         tilt REAL,
+    #         azimuth REAL,
+    #         router_id TEXT,
+    #         pwd TEXT,
+    #         gradation INTEGER DEFAULT 0,
+    #         mode TEXT DEFAULT 'AutoCons',
+    #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            
+    #         CHECK (mode IN ('AutoCons', 'cost')),
+    #         CHECK (gradation IN (0, 1))
+    #     );
+    #     """
+    #     self.connexion.execute(sql)
+    #     print("Table 'clients' créé")
     
     def create_table_constraints(self):
         """Créer la table basée sur le fichier client_models/constraints.py"""
@@ -126,11 +142,30 @@ class Database:
             temperature_minimale REAL DEFAULT 10.0,
             puissance_maison REAL DEFAULT 0.0,
             
-            FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE
+            FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
+            CHECK (temperature_minimale > 0 AND temperature_minimale < 95),
+            CHECK (puissance_maison >= 0)
         );
         """
         self.connexion.execute(sql)
-        print("Table 'constraints' créée")
+        print("Table 'constraints' créé")
+
+    def create_table_plages_interdites(self):
+        """Créer la table basée sur le fichier client_models/common.py"""
+        sql = """
+        CREATE TABLE IF NOT EXISTS plages_interdites (
+            plage_interdite_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            constraint_id INTEGER,
+            heure_debut TEXT NOT NULL,
+            heure_fin TEXT NOT NULL,
+            
+            FOREIGN KEY (constraint_id) REFERENCES constraints(constraint_id) ON DELETE CASCADE,
+            UNIQUE (constraint_id, heure_debut, heure_fin),
+            CHECK (heure_debut < heure_fin)
+        );
+        """
+        self.connexion.execute(sql)
+        print("Table 'plages_interdites' créé")
     
     def create_table_water_heaters(self):
         """Créer la table basée sur le fichier client_models/water_heaters.py"""
@@ -149,7 +184,7 @@ class Database:
         );
         """
         self.connexion.execute(sql)
-        print("Table 'water_heaters' créée")
+        print("Table 'water_heaters' créé")
     
     def create_table_consignes(self):
         """Créer la table basée sur le fichier client_models/consignes_models.py"""
@@ -170,95 +205,83 @@ class Database:
         );
         """
         self.connexion.execute(sql)
-        print("Table 'consignes' créée")
+        print("Table 'consignes' créé")
     
     def create_table_creneaux_hp(self):
         """Créer la table de creneaux_hp basée sur le fichier client_models/prices_model.py"""
         sql = """
         CREATE TABLE IF NOT EXISTS creneaux_hp (
             creneau_hp_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER,
             heure_debut TEXT NOT NULL,
             heure_fin TEXT NOT NULL,
             
-            UNIQUE (heure_debut, heure_fin),
+            FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
+            UNIQUE (client_id, heure_debut, heure_fin),
             CHECK (heure_debut < heure_fin)
         );
         """
         self.connexion.execute(sql)
-        print("Table 'creneaux_hp' créée")
+        print("Table 'creneaux_hp' créé")
     
     def create_table_prices(self):
         """Créer la table prices de l'énergie basée sur le fichier client_models/prices_model.py"""
         sql = """
         CREATE TABLE IF NOT EXISTS prices (
-            type TEXT PRIMARY KEY,
+            client_id INTEGER,
+            type TEXT,
             prix REAL NOT NULL,
+
+            PRIMARY KEY (client_id, type),
+            FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
             CHECK (type IN ('base', 'hp', 'hc', 'revente')),
             CHECK (prix >= 0)
         );
         """
         self.connexion.execute(sql)
-        print("Table 'prices' créée")
-    
-    def create_table_plages_interdites(self):
-        """Créer la table basée sur le fichier client_models/common.py"""
-        sql = """
-        CREATE TABLE IF NOT EXISTS plages_interdites (
-            plage_interdite_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            constraint_id INTEGER,
-            heure_debut TEXT NOT NULL,
-            heure_fin TEXT NOT NULL,
-            
-            FOREIGN KEY (constraint_id) REFERENCES constraints(constraint_id) ON DELETE CASCADE,
-            UNIQUE (constraint_id, heure_debut, heure_fin),
-            CHECK (heure_debut < heure_fin)
-        );
-        """
-        self.connexion.execute(sql)
-        print("Table 'plages_interdites' créée")
+        print("Table 'prices' créé")
     
     def insert_initial_data(self):
         """Insérer les données initiales"""
         
         # 1. Insérer le client admin (comme dans MySQL)
-        donnees_admin = (1, 'Admin', '', 0.0, 0.0, 0.00, 0.00, '', 
-                        '$2b$12$YUs0XL4wLsQk79JLhaJmLuvQZrIkzXdc7vjyZNDINpGFR4gxCUBMy')
+        donnees_admin = (1, 0, 'AutoCons')
         
         try:
             self.connexion.execute("""
                 INSERT OR IGNORE INTO clients 
-                (client_id, nom, email, latitude, longitude, tilt, azimuth, router_id, pwd) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (client_id, gradation, mode) 
+                VALUES (?, ?, ?)
             """, donnees_admin)
         except sqlite3.IntegrityError:
             # ID 1 existe déjà, utiliser AUTOINCREMENT
             donnees_admin = donnees_admin[1:]  # Retirer le client_id
             self.connexion.execute("""
                 INSERT OR IGNORE INTO clients 
-                (nom, email, latitude, longitude, tilt, azimuth, router_id, pwd) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (client_id, gradation, mode) 
+                VALUES (?, ?, ?)
             """, donnees_admin)
         
         # 2. Insérer les prix par défaut
         prix_base = [
-            ('base', 0.18),    # Prix de base par kWh
-            ('hp', 0.22),      # Heures de pointe
-            ('hc', 0.15),      # Heures creuses
-            ('revente', 0.10)  # Prix de revente
+            (1, 'base', 0.18),    # Prix de base par kWh
+            (1, 'hp', 0.22),      # Heures de pointe
+            (1, 'hc', 0.15),      # Heures creuses
+            (1, 'revente', 0.10)  # Prix de revente
         ]
         
         self.connexion.executemany("""
-            INSERT OR IGNORE INTO prices (type, prix) VALUES (?, ?)
+            INSERT OR IGNORE INTO prices (client_id, type, prix) VALUES (?, ?, ?)
         """, prix_base)
         
         # 3. Insérer les horaires de pointe par défaut (exemple: 06h-08h et 17h-19h)
         horaires_hp = [
-            ('17:00:00', '19:00:00'),
-            ('06:00:00', '08:00:00')
+            (1, '17:00:00', '19:00:00'),
+            (1, '06:00:00', '08:00:00')
         ]
         
         self.connexion.executemany("""
-            INSERT OR IGNORE INTO creneaux_hp (heure_debut, heure_fin) VALUES (?, ?)
+            INSERT OR IGNORE INTO creneaux_hp (client_id, heure_debut, heure_fin) VALUES (?, ?, ?)
         """, horaires_hp)
         
         self.connexion.commit()
@@ -279,7 +302,13 @@ class Database:
             ("CREATE INDEX IF NOT EXISTS idx_consignes_day ON consignes(day)"),
             
             # Table plages_interdites
-            ("CREATE INDEX IF NOT EXISTS idx_plages_constraint ON plages_interdites(constraint_id)")
+            ("CREATE INDEX IF NOT EXISTS idx_plages_constraint ON plages_interdites(constraint_id)"),
+
+            # Table prices
+            ("CREATE INDEX IF NOT EXISTS idx_prices_client ON prices(client_id)"),
+
+            # Table creneaux_hp
+            ("CREATE INDEX IF NOT EXISTS idx_creneaux_hp_client ON creneaux_hp(client_id)")
         ]
         
         for sql in index_liste:
@@ -288,7 +317,7 @@ class Database:
         print("Index créés")
     
     def verifier_structure(self):
-        """Vérifier si toutes les tables ont été créées"""
+        """Vérifier si toutes les tables ont été créés"""
         curseur = self.connexion.cursor()
         
         # Lister toutes les tables
@@ -489,7 +518,7 @@ def create_base_complete(chemin_db=None):
             base_donnees.close_db()
 
 def tester_requetes(base_donnees):
-    """Tester quelques requêtes sur la base créée"""
+    """Tester quelques requêtes sur la base créé"""
     
     if not base_donnees.connect_db():
         return
@@ -501,9 +530,9 @@ def tester_requetes(base_donnees):
     
     # 1. Lister les clients
     print("\n1. Liste des clients:")
-    curseur.execute("SELECT client_id, nom, email, mode FROM clients")
+    curseur.execute("SELECT client_id, gradation, mode FROM clients")
     for client in curseur.fetchall():
-        print(f"   ID: {client[0]:3} | Nom: {client[1]:15} | Email: {client[2]:20} | Mode: {client[3]}")
+        print(f"   ID: {client[0]:3} | Gradation: {client[1]} | Mode: {client[2]}")
     
     # 2. Vérifier les prix
     print("\n2. Table des prix:")
@@ -520,8 +549,8 @@ def tester_requetes(base_donnees):
     # 4. Tester les contraintes d'unicité
     print("\n4. Test des contraintes d'unicité...")
     try:
-        # Essayer d'insérer un doublon dans prices
-        curseur.execute("INSERT INTO prices (type, prix) VALUES ('base', 0.20)")
+        # Essayer d'insérer un doublon dans creneaux hp
+        curseur.execute("INSERT INTO creneaux_hp (client_id, heure_debut, heure_fin) VALUES (1, '17:00:00', '19:00:00')")
         print("    ERREUR: Devrait avoir échoué (contrainte UNIQUE)")
     except sqlite3.IntegrityError:
         print("    OK: Contrainte UNIQUE fonctionne")
@@ -536,7 +565,7 @@ def exemple_utilisation_avancee():
     print("=" * 50)
     
     # Demander le chemin pour l'exemple
-    chemin_db = demander_chemin_db("Chemin pour l'exemple [exemple_test.db]: ")
+    chemin_db = input("Chemin pour l'exemple [exemple_test.db]: ").strip()
     if not chemin_db:
         chemin_db = os.path.join(os.getcwd(), 'exemple_test.db')
     
@@ -553,12 +582,9 @@ def exemple_utilisation_avancee():
         # 1. Insérer le client
         curseur = base_donnees.connexion.cursor()
         curseur.execute("""
-            INSERT INTO clients (nom, email, latitude, longitude, tilt, azimuth, router_id, pwd, mode)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            'Jean Dupont', 'jean@email.com', -23.550520, -46.633308, 
-            30.0, 180.0, 'RT001', 'motdepasse123', 'AutoCons'
-        ))
+            INSERT INTO clients (gradation, mode)
+            VALUES (?, ?)
+        """, (1, 'AutoCons'))
         
         id_client = curseur.lastrowid
         
@@ -605,7 +631,7 @@ def exemple_utilisation_avancee():
         # Consulter les données insérées
         print("Données du client inséré:")
         curseur.execute("""
-            SELECT c.client_id, c.nom, c.mode, 
+            SELECT c.client_id, c.gradation, c.mode, 
                    ct.temperature_minimale, ct.puissance_maison,
                    wh.volume, wh.power,
                    COUNT(DISTINCT cs.consigne_id) as total_consignes,
@@ -622,7 +648,7 @@ def exemple_utilisation_avancee():
         donnees = curseur.fetchone()
         print(f"""
    ID Client: {donnees[0]}
-   Nom: {donnees[1]}
+   Gradation: {donnees[1]}
    Mode: {donnees[2]}
    Temp. Minimale: {donnees[3]}°C
    Puissance Maison: {donnees[4]} kW
