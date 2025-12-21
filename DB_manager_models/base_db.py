@@ -3,21 +3,57 @@ import os
 from datetime import datetime
 
 class Database:
-    def __init__(self, nom_db='/home/lacampelo/optimasol/Optimiser_Engine-v2.0/database/db_engine_sqlite.db'):
+    def __init__(self, chemin_db=None):
         """
         Initialise la classe Database
         
         Args:
-            nom_db (str): Nom du fichier de base de données SQLite
+            chemin_db (str): Chemin complet du fichier de base de données SQLite
+                            Si None, utilise le chemin par défaut dans le répertoire courant
         """
-        self.nom_db = nom_db
+        if chemin_db is None:
+            # Chemin par défaut dans le répertoire courant
+            self.chemin_db = os.path.join(os.getcwd(), 'db_engine_sqlite.db')
+        else:
+            # Utiliser le chemin fourni
+            self.chemin_db = chemin_db
+        
+        # S'assurer que le chemin est absolu
+        if not os.path.isabs(self.chemin_db):
+            self.chemin_db = os.path.join(os.getcwd(), self.chemin_db)
+        
+        # Extraire le nom du fichier pour les affichages
+        self.nom_fichier = os.path.basename(self.chemin_db)
+        self.dossier_parent = os.path.dirname(self.chemin_db)
+        
         self.connexion = None
         
+        # Créer le dossier parent si nécessaire
+        if self.dossier_parent and not os.path.exists(self.dossier_parent):
+            os.makedirs(self.dossier_parent)
+            print(f"Dossier créé: {self.dossier_parent}")
+    
+    def obtenir_info_db(self):
+        """Retourne des informations sur la base de données"""
+        return {
+            'chemin_complet': self.chemin_db,
+            'nom_fichier': self.nom_fichier,
+            'dossier_parent': self.dossier_parent,
+            'existe': os.path.exists(self.chemin_db),
+            'taille_octets': os.path.getsize(self.chemin_db) if os.path.exists(self.chemin_db) else 0,
+            'taille_mb': os.path.getsize(self.chemin_db) / (1024 * 1024) if os.path.exists(self.chemin_db) else 0
+        }
+    
     def connect_db(self):
         """Établir une connexion à la base de données SQLite"""
-        self.connexion = sqlite3.connect(self.nom_db)
-        self.connexion.execute("PRAGMA foreign_keys = ON")  # Activer les clés étrangères
-        print(f"Connecté à la base de données: {self.nom_db}")
+        try:
+            self.connexion = sqlite3.connect(self.chemin_db)
+            self.connexion.execute("PRAGMA foreign_keys = ON")  # Activer les clés étrangères
+            print(f"Connecté à la base de données: {self.chemin_db}")
+            return True
+        except sqlite3.Error as e:
+            print(f"Erreur de connexion: {e}")
+            return False
         
     def close_db(self):
         """Fermer la connexion à la base de données"""
@@ -218,7 +254,7 @@ class Database:
         # 3. Insérer les horaires de pointe par défaut (exemple: 06h-08h et 17h-19h)
         horaires_hp = [
             ('17:00:00', '19:00:00'),
-            ('06:00:00', '18:00:00')
+            ('06:00:00', '08:00:00')
         ]
         
         self.connexion.executemany("""
@@ -259,7 +295,7 @@ class Database:
         curseur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         tables = curseur.fetchall()
         
-        print(f"\nStructure de la base '{self.nom_db}':")
+        print(f"\nStructure de la base '{self.chemin_db}':")
         print("=" * 60)
         
         for table in tables:
@@ -281,12 +317,17 @@ class Database:
         
         print("=" * 60)
     
-    def exporter_vers_sql(self, fichier_sql='db_engine_sqlite.sql'):
+    def exporter_vers_sql(self, fichier_sql=None):
         """Exporter la structure vers un fichier SQL"""
+        if fichier_sql is None:
+            # Créer un nom de fichier basé sur le nom de la base
+            base_name = os.path.splitext(self.nom_fichier)[0]
+            fichier_sql = f"{base_name}_export.sql"
+        
         curseur = self.connexion.cursor()
         
         with open(fichier_sql, 'w', encoding='utf-8') as f:
-            f.write(f'-- Base SQLite: {self.nom_db}\n')
+            f.write(f'-- Base SQLite: {self.chemin_db}\n')
             f.write(f'-- Exporté le: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n')
             
             # Désactiver temporairement les clés étrangères
@@ -334,28 +375,101 @@ class Database:
 
 # ====== FONCTIONS UTILITAIRES ======
 
-def create_base_complete(nom_base='db_engine_sqlite.db'):
+def demander_chemin_db(prompt="Chemin complet de la base de données: "):
+    """Demander un chemin de base de données avec validation"""
+    while True:
+        chemin = input(prompt).strip()
+        
+        if not chemin:
+            # Utiliser le chemin par défaut
+            chemin = os.path.join(os.getcwd(), 'db_engine_sqlite.db')
+            print(f"Utilisation du chemin par défaut: {chemin}")
+            return chemin
+        
+        # Vérifier si le chemin a l'extension .db
+        if not chemin.lower().endswith(('.db', '.sqlite', '.sqlite3')):
+            print("Attention: Le fichier devrait avoir l'extension .db, .sqlite ou .sqlite3")
+        
+        # Convertir en chemin absolu
+        chemin = os.path.abspath(chemin)
+        
+        # Vérifier si le dossier parent existe
+        dossier_parent = os.path.dirname(chemin)
+        if dossier_parent and not os.path.exists(dossier_parent):
+            creer = input(f"Le dossier '{dossier_parent}' n'existe pas. Le créer? (o/n): ").strip().lower()
+            if creer == 'o':
+                os.makedirs(dossier_parent, exist_ok=True)
+                print(f"Dossier créé: {dossier_parent}")
+            else:
+                print("Opération annulée.")
+                continue
+        
+        return chemin
+
+def lister_bases_donnees(dossier=None):
+    """Lister toutes les bases de données dans un dossier"""
+    if dossier is None:
+        dossier = os.getcwd()
+    
+    bases = []
+    extensions = ('.db', '.sqlite', '.sqlite3')
+    
+    for fichier in os.listdir(dossier):
+        if fichier.lower().endswith(extensions):
+            chemin = os.path.join(dossier, fichier)
+            taille = os.path.getsize(chemin)
+            bases.append({
+                'nom': fichier,
+                'chemin': chemin,
+                'taille_mb': taille / (1024 * 1024)
+            })
+    
+    return bases
+
+def create_base_complete(chemin_db=None):
     """
     Fonction principale pour créer la base complète
     
     Args:
-        nom_base (str): Nom de la base de données
+        chemin_db (str): Chemin complet de la base de données
     
     Returns:
         Database: Instance de la classe Database
     """
     
-    # Supprimer la base existante si on veut recréer
-    if os.path.exists(nom_base):
-        os.remove(nom_base)
-        print(f" Base précédente supprimée: {nom_base}")
+    if chemin_db is None:
+        chemin_db = demander_chemin_db()
+    
+    info = {
+        'chemin': chemin_db,
+        'existe': os.path.exists(chemin_db),
+        'taille': os.path.getsize(chemin_db) if os.path.exists(chemin_db) else 0
+    }
+    
+    print(f"\nInformations sur la base:")
+    print(f"  Chemin: {info['chemin']}")
+    print(f"  Existe: {'Oui' if info['existe'] else 'Non'}")
+    if info['existe']:
+        print(f"  Taille: {info['taille'] / 1024:.1f} KB")
+    
+    # Demander confirmation si la base existe déjà
+    if info['existe']:
+        confirmation = input("\nLa base existe déjà. La recréer? (o/n): ").strip().lower()
+        if confirmation != 'o':
+            print("Opération annulée.")
+            return None
+        
+        # Supprimer l'ancienne base
+        os.remove(chemin_db)
+        print(f"Ancienne base supprimée: {chemin_db}")
     
     # Créer la base de données
-    base_donnees = Database(nom_base)
+    base_donnees = Database(chemin_db)
     
     try:
         # Se connecter
-        base_donnees.connect_db()
+        if not base_donnees.connect_db():
+            return None
         
         # Créer toutes les tables
         base_donnees.create_all_tables()
@@ -363,21 +477,23 @@ def create_base_complete(nom_base='db_engine_sqlite.db'):
         # Vérifier la structure
         base_donnees.verifier_structure()
         
-        # Exporter vers SQL
-        base_donnees.exporter_vers_sql()
-        
         return base_donnees
         
     except Exception as e:
-        print(f" Erreur: {e}")
+        print(f"Erreur: {e}")
+        import traceback
+        traceback.print_exc()
         return None
     finally:
-        base_donnees.close_db()
+        if base_donnees and base_donnees.connexion:
+            base_donnees.close_db()
 
 def tester_requetes(base_donnees):
     """Tester quelques requêtes sur la base créée"""
     
-    base_donnees.connect_db()
+    if not base_donnees.connect_db():
+        return
+    
     curseur = base_donnees.connexion.cursor()
     
     print("Test des requêtes:")
@@ -413,19 +529,16 @@ def tester_requetes(base_donnees):
     base_donnees.connexion.commit()
     base_donnees.close_db()
 
-def exemple_utilisation_avancee(chemin_db='exemple_test.db'):
+def exemple_utilisation_avancee():
     """Exemple d'utilisation de la base dans une application"""
-
-    # Supprimer la base existante si on veut recréer
-    if os.path.exists(chemin_db):
-        os.remove(chemin_db)
-        print(f" Base précédente supprimée: {chemin_db}")
-    
-    # Créer la base de données
-    base_donnees = Database(chemin_db)
     
     print("Exemple d'utilisation avancée:")
     print("=" * 50)
+    
+    # Demander le chemin pour l'exemple
+    chemin_db = demander_chemin_db("Chemin pour l'exemple [exemple_test.db]: ")
+    if not chemin_db:
+        chemin_db = os.path.join(os.getcwd(), 'exemple_test.db')
     
     # Créer la base
     base_donnees = create_base_complete(chemin_db)
@@ -520,19 +633,21 @@ def exemple_utilisation_avancee(chemin_db='exemple_test.db'):
         """)
         
         base_donnees.close_db()
-        print(" Exemple terminé avec succès!")
+        print("Exemple terminé avec succès!")
 
 # ====== MENU INTERACTIF ======
 
 def menu_principal():
     """Menu interactif pour gérer la base de données"""
     
+    base_donnees = None
+    
     while True:
         print("\n" + "=" * 60)
         print("SYSTEME DE CREATION ET DE TEST DE BASES DE DONNEES SQLite")
         print("=" * 60)
         print("1. Créer une base complète à partir de zéro")
-        print("2. Tester des requêtes")
+        print("2. Tester des requêtes sur une base existante")
         print("3. Voir un exemple d'utilisation avancée")
         print("4. Exporter la structure vers SQL")
         print("5. Quitter")
@@ -541,44 +656,51 @@ def menu_principal():
         option = input("Choisissez une option (1-5): ").strip()
         
         if option == '1':
-            nom = input("Nom de la base [db_engine_sqlite.db]: ") or 'db_engine_sqlite.db'
-            create_base_complete(nom)
+            base_donnees = create_base_complete()
             
         elif option == '2':
-            nom = input("Nom de la base à tester [db_engine_sqlite.db]: ") or 'db_engine_sqlite.db'
-            if os.path.exists(nom):
-                base_donnees = Database(nom)
-                tester_requetes(base_donnees)
-            else:
-                print(f" Base '{nom}' non trouvée!")
-                
+            if base_donnees is None:
+                chemin_db = demander_chemin_db("Chemin de la base à tester: ")
+                if os.path.exists(chemin_db):
+                    base_donnees = Database(chemin_db)
+                else:
+                    print(f"Base non trouvée: {chemin_db}")
+                    continue
+            
+            tester_requetes(base_donnees)
+            
         elif option == '3':
             exemple_utilisation_avancee()
             
         elif option == '4':
-            nom = input("Nom de la base à exporter [db_engine_sqlite.db]: ") or 'db_engine_sqlite.db'
-            if os.path.exists(nom):
-                base_donnees = Database(nom)
-                base_donnees.connect_db()
-                fichier = base_donnees.exporter_vers_sql()
-                base_donnees.close_db()
-                print(f" Exporté vers: {fichier}")
-            else:
-                print(f" Base '{nom}' non trouvée!")
-                
+            if base_donnees is None:
+                chemin_db = demander_chemin_db("Chemin de la base à exporter: ")
+                if os.path.exists(chemin_db):
+                    base_donnees = Database(chemin_db)
+                else:
+                    print(f"Base non trouvée: {chemin_db}")
+                    continue
+            
+            base_donnees.connect_db()
+            fichier = base_donnees.exporter_vers_sql()
+            base_donnees.close_db()
+            print(f"Exporté vers: {fichier}")
+            
         elif option == '5':
             print("Au revoir...")
             break
             
         else:
-            print(" Option invalide!")
+            print("Option invalide!")
 
-# ====== EXÉCUTION ======
+# ====== EXÉCUTION DIRECTE ======
 
 if __name__ == "__main__":
     # Exécuter le menu interactif
     menu_principal()
     
-    # Ou exécuter directement:
-    # base_donnees = create_base_complete()
-    # tester_requetes(base_donnees)
+    # Ou exécuter directement avec un chemin spécifique:
+    # chemin_db = "/chemin/complet/vers/ma_base.db"
+    # base_donnees = create_base_complete(chemin_db)
+    # if base_donnees:
+    #     tester_requetes(base_donnees)
