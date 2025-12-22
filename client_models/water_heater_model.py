@@ -1,4 +1,3 @@
-
 class WaterHeater :
     def __init__(self, volume, power) :
         self.volume = volume               #EN LITRES 

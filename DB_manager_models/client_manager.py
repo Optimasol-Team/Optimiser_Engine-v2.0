@@ -9,11 +9,12 @@ from pathlib import Path
 chemin_base = Path(__file__).parent.parent
 sys.path.append(str(chemin_base / 'client_models'))
 
-from client_models import Client, Features, Planning, Constraints, Prices, WaterHeater 
+from client_models import Client, Features, Planning, Constraints, Prices, WaterHeater, PointConsign, Creneau
 from base_db import Database
 import sqlite3
 import os
 from datetime import datetime
+import copy
 
 
 class ClientManager :
@@ -31,24 +32,25 @@ class ClientManager :
         - ConnectionError si accès impossible à la DB. 
         - ValueError : Si entrées non respectés. 
         """
-        #TODO : Le but est : prendre le client et mettre ses données dans la BDD. 
 
         # Connection avec le BDD
         try:
             self.db.connect_db()
             print(f"Connecté à la base de données: {self.path_db}")
+            cursor = self.db.connexion.cursor()
 
             # Table 'clients'
             self.db.create_table_clients()
             donnees_client = (client.client_id, client.features.gradation(), client.features.mode()) 
             try:
-                self.db.connexion.execute("""
+                cursor.execute("""
                     INSERT OR IGNORE INTO clients 
                     (client_id, gradation, mode) 
                     VALUES (?, ?, ?)
                 """, donnees_client)
             except sqlite3.IntegrityError as e:
                 self.db.connexion.rollback() # Efacez TOUT depuis le début.
+                cursor.close()
                 self.db.close_db()
                 raise ValueError(
                     f"ID du client déjà existe.\n"
@@ -64,13 +66,14 @@ class ClientManager :
                     donnees_client = (client.client_id, consigne.day(), consigne.moment(), 
                                       consigne.temperature(), consigne.volume()) 
                     try:
-                        self.db.connexion.execute("""
+                        cursor.execute("""
                         INSERT OR IGNORE INTO consignes 
                         (client_id, day, moment, temperature, volume) 
                         VALUES (?, ?, ?, ?, ?)
                     """, donnees_client)
                     except sqlite3.IntegrityError as e:
                         self.db.connexion.rollback() # Efacez TOUT depuis le début.
+                        cursor.close()
                         self.db.close_db()
                         raise ValueError(
                             f"Valeur invalide envoyée dans le planning.\n"
@@ -84,12 +87,12 @@ class ClientManager :
                 donnees_client = (client.client_id, client.contraintes.temperature_minimale(), 
                                   client.contraintes.puissance_maison())
                 try:
-                    self.db.connexion.execute("""
+                    cursor.execute("""
                     INSERT OR IGNORE INTO constraints 
                     (client_id, temperature_minimale, puissance_maison) 
                     VALUES (?, ?, ?)
                 """, donnees_client)
-                    contraint_id = self.db.connexion.lastrowid
+                    contraint_id = cursor.lastrowid()
 
             # Table 'plages_interdites'
                     self.db.create_table_plages_interdites()
@@ -97,7 +100,7 @@ class ClientManager :
                     for plage_interdite in list_plages_interdites:
                         donnees_client = (contraint_id, plage_interdite.debut, plage_interdite.fin)
                         try:
-                            self.db.connexion.execute("""
+                            cursor.execute("""
                             INSERT OR IGNORE INTO plages_interdites
                             (client_id, day, moment, temperature, volume) 
                             VALUES (?, ?, ?, ?, ?)
@@ -112,6 +115,7 @@ class ClientManager :
                             ) from e
                 except sqlite3.IntegrityError as e:
                     self.db.connexion.rollback() # Efacez TOUT depuis le début.
+                    cursor.close()
                     self.db.close_db()
                     raise ValueError(
                         f"Valeur invalide envoyée dans les contraintes.\n"
@@ -126,13 +130,14 @@ class ClientManager :
                     donnees_client = [(client.client_id, 'base', client.prix.base()),
                                         (client.client_id, 'revente', client.prix.revente())]
                     try:
-                        self.db.connexion.executemany("""
+                        cursor.executemany("""
                             INSERT OR IGNORE INTO prices 
                             (client_id, type, prix) 
                             VALUES (?, ?, ?)
                         """, donnees_client)
                     except sqlite3.IntegrityError as e:
                         self.db.connexion.rollback() # Efacez TOUT depuis le début.
+                        cursor.close()
                         self.db.close_db()
                         raise ValueError(
                             f"Valeur invalide envoyée dans les prix.\n"
@@ -144,7 +149,7 @@ class ClientManager :
                                         (client.client_id, 'hc', client.prix.hc()),
                                         (client.client_id, 'revente', client.prix.revente())]
                     try:
-                        self.db.connexion.executemany("""
+                        cursor.executemany("""
                             INSERT OR IGNORE INTO prices 
                             (client_id, type, prix) 
                             VALUES (?, ?, ?)
@@ -156,13 +161,14 @@ class ClientManager :
                         for creneau_hp in list_creneaux_hp:
                             donnees_client = (client.client_id, creneau_hp.debut, creneau_hp.fin)
                             try:
-                                self.db.connexion.executemany("""
+                                cursor.executemany("""
                                     INSERT OR IGNORE INTO prices 
                                     (client_id, heure_debut, heure_fin) 
                                     VALUES (?, ?, ?)
                                 """, donnees_client)
                             except sqlite3.IntegrityError as e:
                                 self.db.connexion.rollback() # Efacez TOUT depuis le début.
+                                cursor.close()
                                 self.db.close_db()
                                 raise ValueError(
                                     f"Valeur invalide envoyée dans les creneaux_hp.\n"
@@ -172,6 +178,7 @@ class ClientManager :
 
                     except sqlite3.IntegrityError as e:
                         self.db.connexion.rollback() # Efacez TOUT depuis le début.
+                        cursor.close()
                         self.db.close_db()
                         raise ValueError(
                             f"Valeur invalide envoyée dans les prix.\n"
@@ -180,6 +187,7 @@ class ClientManager :
                         ) from e
                 else:
                     self.db.connexion.rollback() # Efacez TOUT depuis le début.
+                    cursor.close()
                     self.db.close_db()
                     raise ValueError(
                         f"Mode invalide dans les prix.\n"
@@ -193,13 +201,14 @@ class ClientManager :
                                 client.chauffe_eau.power(), client.chauffe_eau.coefficient_isolation(), 
                                 client.chauffe_eau.temperature_eau_froide())
                 try:
-                    self.db.connexion.execute("""
+                    cursor.execute("""
                         INSERT OR IGNORE INTO water_heaters
                         (client_id, volume, power, coeff_isolation, temperature_eau_froide_celsius) 
                         VALUES (?, ?, ?, ?, ?)
                     """, donnees_client)
                 except sqlite3.IntegrityError as e:
                     self.db.connexion.rollback() # Efacez TOUT depuis le début.
+                    cursor.close()
                     self.db.close_db()
                     raise ValueError(
                         f"Valeur invalide envoyée dans les water_heaters.\n"
@@ -216,6 +225,7 @@ class ClientManager :
                 f"Erreur SQLite: {e}"
             ) from e
         finally:
+            cursor.close()
             self.db.close_db()
         
 
@@ -232,7 +242,212 @@ class ClientManager :
         """
         #TODO : Prend le client_id et renvoie le client qui porte ce id. 
         #La fonction va aller chercher dans la BDD pour reconstituer les éléments concrets du client. 
-        pass 
+
+        # Connection avec le BDD
+        try:
+            self.db.connect_db()
+            print(f"Connecté à la base de données: {self.path_db}")
+            
+            # Configurer pour retourner des dictionnaires
+            self.db.connexion.row_factory = sqlite3.Row
+            
+            # Créer un curseur pour exécuter les requêtes
+            curseur = self.db.connexion.cursor()
+            
+            ########################################################################
+            #  Exécuter la requête SQL pour trouver les donnees de la table 'clients'
+            ########################################################################
+            curseur.execute("SELECT client_id, gradation, mode FROM clients WHERE client_id=?", (client_id,))
+            
+            # Récupérer tous les résultats
+            enregistrements = curseur.fetchall()
+            
+            if not enregistrements:
+                raise ValueError(f"Aucun client avec l'ID {client_id}\n")
+            
+            # Convertir en liste de dictionnaires
+            resultats = []
+            for ligne in enregistrements:
+                resultats.append(dict(ligne))  # Convertit Row en dictionnaire
+            donnes_client = resultats[0]
+
+            ####################################################################################################
+            #  Exécuter la requête SQL pour trouver les donnees de la table 'constraints' et 'plages_interdites'
+            ####################################################################################################
+            curseur.execute(
+                """SELECT ct.temperature_minimale, ct.puissance_maison, pi.heure_debut, pi.heure_fin
+                FROM constraints ct LEFT JOIN plages_interdites pi ON pi.constraint_id = ct.constraint_id
+                WHERE ct.client_id=?""", (client_id,)
+                )
+            
+            # Récupérer tous les résultats
+            enregistrements = curseur.fetchall()
+            
+            if not enregistrements:
+                list_donnes_constraints = None
+            else:
+                # Convertir en liste de dictionnaires
+                resultats = []
+                for ligne in enregistrements:
+                    resultats.append(dict(ligne))  # Convertit Row en dictionnaire
+                list_donnes_constraints = copy.deepcopy(resultats)
+
+            ###############################################################################
+            #  Exécuter la requête SQL pour trouver les donnees de la table 'water_heaters'
+            ###############################################################################
+            curseur.execute("""SELECT volume, power, coeff_isolation, temperature_eau_froide_celsius
+                            FROM water_heaters
+                            WHERE client_id=?""", (client_id,))
+            
+            # Récupérer tous les résultats
+            enregistrements = curseur.fetchall()
+            
+            if not enregistrements:
+                donnes_water_heaters = None
+            else:
+                # Convertir en liste de dictionnaires
+                resultats = []
+                for ligne in enregistrements:
+                    resultats.append(dict(ligne))  # Convertit Row en dictionnaire
+                donnes_water_heaters = resultats[0]
+
+            ###########################################################################
+            #  Exécuter la requête SQL pour trouver les donnees de la table 'consignes'
+            ###########################################################################
+            curseur.execute("""SELECT day, moment, temperature, volume
+                            FROM consignes
+                            WHERE client_id=?""", (client_id,))
+            
+            # Récupérer tous les résultats
+            enregistrements = curseur.fetchall()
+            
+            if not enregistrements:
+                list_donnes_consignes = None
+            else:
+                # Convertir en liste de dictionnaires
+                resultats = []
+                for ligne in enregistrements:
+                    resultats.append(dict(ligne))  # Convertit Row en dictionnaire
+                list_donnes_consignes = copy.deepcopy(resultats)
+
+            ########################################################################
+            #  Exécuter la requête SQL pour trouver les donnees de la table 'prices'
+            ########################################################################
+            curseur.execute(
+                """SELECT type, prix
+                FROM prices
+                WHERE p.client_id=?""", (client_id,)
+                )
+            
+            # Récupérer tous les résultats
+            enregistrements = curseur.fetchall()
+            
+            if not enregistrements:
+                list_donnes_prices = None
+            else:
+                # Convertir en liste de dictionnaires
+                resultats = []
+                for ligne in enregistrements:
+                    resultats.append(dict(ligne))  # Convertit Row en dictionnaire
+                list_donnes_prices = copy.deepcopy(resultats)
+
+            #############################################################################
+            #  Exécuter la requête SQL pour trouver les donnees de la table 'creneaux_hp'
+            #############################################################################
+            curseur.execute(
+                """SELECT heure_debut, heure_fin
+                FROM creneaux_hp
+                WHERE p.client_id=?""", (client_id,)
+                )
+            
+            # Récupérer tous les résultats
+            enregistrements = curseur.fetchall()
+            
+            if not enregistrements:
+                list_donnes_creneaux_hp = None
+            else:
+                # Convertir en liste de dictionnaires
+                resultats = []
+                for ligne in enregistrements:
+                    resultats.append(dict(ligne))  # Convertit Row en dictionnaire
+                list_donnes_creneaux_hp = copy.deepcopy(resultats)
+
+            ##################
+            #  Reconstruction
+            ##################
+
+            # Partie Planning
+            planning_reconstruit = Planning()
+            if list_donnes_consignes:
+                list_points_consign = []
+                for consigne in list_donnes_consignes:
+                    list_points_consign.append(PointConsign(consigne['day'], consigne['moment'],
+                                                            consigne['temperature'], consigne['volume']))
+                planning_reconstruit.consignes(list_points_consign)
+
+            # Partie Constraints
+            if list_donnes_constraints:
+                list_creneaux = []
+                for constraint in list_donnes_constraints:
+                    list_creneaux.append(Creneau(constraint['heure_debut'], constraint['heure_fin']))
+                constraint = list_donnes_constraints[0]
+                constraints_reconstruit = Constraints(list_creneaux, constraint['temperature_minimale'],
+                                                      constraint['puissance_maison'])
+            else:
+                constraints_reconstruit = Constraints()
+
+            # Partie Features
+            if donnes_client['gradation'] == 1:
+                features_reconstruit = Features(True, donnes_client['mode'])
+            else:
+                features_reconstruit = Features(False, donnes_client['mode'])
+                    
+            # Partie Prices
+            prix_reconstruit = Prices()
+            if list_donnes_prices:
+                for price in list_donnes_prices:
+                    if price['type'] == 'base':
+                        prix_reconstruit.base(price['prix'])
+                    elif price['type'] == 'revente':
+                        prix_reconstruit.revente(price['prix'])
+                prix_reconstruit.mode('HPHC')
+                for price in list_donnes_prices:
+                    if price['type'] == 'hp':
+                        prix_reconstruit.hp(price['prix'])
+                    elif price['type'] == 'hc':
+                        prix_reconstruit.hc(price['prix'])
+                list_creneaux_hp = []
+                for creneau_hp in list_donnes_creneaux_hp:
+                    list_creneaux_hp.append(Creneau(creneau_hp['heure_debut'], creneau_hp['heure_fin']))
+                prix_reconstruit.creneaux_hp(list_creneaux_hp)
+
+            # Partie WaterHeater
+            water_heater_reconstruit = WaterHeater(donnes_water_heaters['volume'],
+                                                   donnes_water_heaters['power'])
+            water_heater_reconstruit.coefficient_isolation(donnes_water_heaters['coeff_isolation'])
+            water_heater_reconstruit.temperature_eau_froide(donnes_water_heaters['temperature_eau_froide_celsius'])
+
+                
+            client_reconstruit = Client(
+                planning=planning_reconstruit, 
+                contraintes=constraints_reconstruit, 
+                features=features_reconstruit, 
+                prix=prix_reconstruit, 
+                chauffe_eau=water_heater_reconstruit, 
+                client_id=donnes_client['client_id']
+            )
+            
+            return client_reconstruit
+        
+        except sqlite3.Error as e:
+            raise ConnectionError(
+                f"Impossible de se connecter à la base de données.\n"
+                f"Chemin: {self.path_db}\n"
+                f"Erreur SQLite: {e}"
+            ) from e
+        finally:
+            curseur.close()
+            self.db.close_db()
     
     def delete_client(self, client_id : int) :
         """Fonction qui supprime le client de la BDD. 
@@ -245,7 +460,7 @@ class ClientManager :
         - DataBaseError : Si l'accès à la BDD est impossible 
         - ClientNotFound : Si le client n'existe pas dans la base de données. """ 
         #TODO : Cette fonction supprime le client de la BDD. 
-        pass
+
 
     def update_client_in_db(self, client : Client, 
                       planning : Planning = None, 
