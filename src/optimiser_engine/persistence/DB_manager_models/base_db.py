@@ -133,22 +133,45 @@ class Database:
     #     self.connexion.execute(sql)
     #     print("Table 'clients' créé")
     
+    ########NOUVELLE FONCTION CREE ############################################## : 
     def create_table_constraints(self):
         """Créer la table basée sur le fichier client_models/constraints.py"""
+        # CORRECTION : On remplace 'puissance_maison' (REAL) par 'profil_conso_json' (TEXT)
         sql = """
         CREATE TABLE IF NOT EXISTS constraints (
             constraint_id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id INTEGER,
             temperature_minimale REAL DEFAULT 10.0,
-            puissance_maison REAL DEFAULT 0.0,
+            profil_conso_json TEXT, 
             
             FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
-            CHECK (temperature_minimale > 0 AND temperature_minimale < 95),
-            CHECK (puissance_maison >= 0)
+            CHECK (temperature_minimale > 0 AND temperature_minimale < 95)
         );
         """
         self.connexion.execute(sql)
-        print("Table 'constraints' créé")
+        print("Table 'constraints' créé (Version JSON)")
+    
+    #######################################################################################. 
+    
+    
+    #####################ANCIENE FONCTION SUPPRIMÉE ##################################
+    #def create_table_constraints(self):
+       # """Créer la table basée sur le fichier client_models/constraints.py"""
+       # sql = """
+        #CREATE TABLE IF NOT EXISTS constraints (
+            #constraint_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            #client_id INTEGER,
+            #temperature_minimale REAL DEFAULT 10.0,
+            #puissance_maison REAL DEFAULT 0.0,
+            
+            #FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
+            #CHECK (temperature_minimale > 0 AND temperature_minimale < 95),
+            #CHECK (puissance_maison >= 0)
+       # );
+       # """
+       # self.connexion.execute(sql)
+        #print("Table 'constraints' créé")
+    ######################################################################################
 
     def create_table_plages_interdites(self):
         """Créer la table basée sur le fichier client_models/common.py"""

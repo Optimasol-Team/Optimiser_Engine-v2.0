@@ -3,9 +3,18 @@
 Auteur : @anaselb 
 """ 
 from client_models import Client 
-from client_models import Creneau, Planning, PointConsign
 import pandas as pd
 from datetime import datetime, timedelta
+
+from models_optimiser.system_config import SystemConfig
+from models_optimiser.external_context import ExternalContext
+from models_optimiser.optimisation_inputs import OptimizationInputs
+from models_optimiser.trajectory import TrajectorySystem, StandardWHType, RouterMode
+from solver import Solver 
+import numpy as np 
+
+class WeatherNotValid(Exception) :
+    pass
 
 class OptimiserService :
     pas_minimal = 5 #5 minutes. 
@@ -47,67 +56,86 @@ class OptimiserService :
         else :
             self._pas = valeur 
 
-    def decisions_of_client(self, client : Client, instant_initial : datetime, temp_initial : float, df_productions : pd.DataFrame) :
-        #Étape 1 : Normaliser le df.  
-        df_normalized = self._normalise_df(df_productions, instant_initial) 
-        # Si ça a pas marché, ça renvoie automatiquement une valueError. 
-        #Maintenant df_normalized est un df avec des dates qui commencent à instant_initial et finissent après horizon avec un pas.
+    def trajectory_of_client(self, 
+                            client : Client, 
+                            instant_initial : datetime, 
+                            temp_initial : float, 
+                            df_productions : pd.DataFrame) :
+        """
+        Orchestre l'optimisation :
+        1. Prépare les données (Normalisation & Extraction vecteurs)
+        2. Construit le modèle mathématique (via formalize_data)
+        3. Résout le problème (via solvers)
+        4. Formate la réponse en DataFrame
+        """
         
-        #Étape 2 : cohérence de la température : 
-        self._is_temperature_realistic(temp_initial) 
         
-        #Étape 3 : Futures Pointconsign : 
-        planning = client.planning
-        future_consignes = planning.recuperer_consignes_futures(0,instant_initial,self.horizon)  
-        #Étape 4 : Features : Gradation et quoi optimiser. 
-        features = client.features 
-        gradation = features.gradation 
-        mode = features.mode 
-        #Étape 5 : Contraintes : 
-        constraints = client.contraintes 
+        try :
+            df_normalized = self._normalise_df(df_productions, instant_initial)
+        except ValueError :
+            raise WeatherNotValid("Le dataframe de la productions n'est pas valide.")
         
-        #4e chose : Faire passer les données conclues au solveur (codé ailleurs) 
-        #5e chose : Récupérer le df de decisions (avec dates ...) 
-        #6e chose : Le renvoyer. 
-        pass 
+        production_array = self._to_array(df_normalized)
+        #On construit un input à partir de ça : 
+        sys_config = SystemConfig.from_client(client = client) 
+        ext_context = ExternalContext.from_client(client = client, 
+                                                  date_heure=instant_initial, 
+                                                  solar_productions= production_array, 
+                                                  horizon=self.horizon,
+                                                  pas_temps=self.pas) 
+        inputs = OptimizationInputs(sys_config, ext_context, temp_initial, client.features.mode) 
+        solver = Solver() 
 
-    def temperature_trajectory(self, client : Client, temp_initial, decisions_df : pd.DataFrame) :
-        #1e chose : Vérifier si une decisions_df vérifie bien la convention pas, horizon. 
-        #2e chose : Vérifier si temp_initial n'est pas une température absurde (genre - 273 °C ou bien 1M de °C) 
-        #3e chose : Traduire decisions_df en puissance de chauffe eau, 
-        #4e chose ; appliquer les méthodes de waterHeater -> calcul des températures. 
-        #5e chose : Renvoi d'un df de la température à chaque point. 
-        pass 
-    def compute_cost(self, client : Client, decisions_df : pd.DataFrame, df_productions : pd.DataFrame) :
-        #1e chose : Vérifications : decisions_df doit respecter la convention pas, horizon. 
-        #2e chose : Les dates dans decisions_df doivent être inclus dans df_productions. 
-        #3e chose : Normaliser le df_productions selon la convention. 
-        #4e chose : Calculer le coût journalier. 
-        pass 
-    def compute_autoconsumption(self, client : Client, decisions_df : pd.DataFrame, df_productions : pd.DataFrame) :
-        #1e chose : Vérifications : decisions_df doit respecter la convention pas, horizon. 
-        #2e chose : Les dates dans decisions_df doivent être inclus dans df_productions. 
-        #3e chose : Normaliser le df_productions selon la convention. 
-        #4e chose : Calculer l'autoconsommation.  
-        pass 
+        trajectory = solver.solve(inputs) 
 
-    def compute_cost_basic(self, client : Client, df_productions : pd.DataFrame, intervalle : Creneau) :
-        #1e chose : checker si intervalle est inclus dans df_productions 
-        #2e chose : Selon contraintes du client, calculer le coût dans creanau. 
-        #3e chose : Renvoyer ce coût. 
-        pass 
-    def compute_autoconsumption_basic(self, client : Client, df_productions : pd.DataFrame, intervalle : Creneau) :
-        #1e chose : checker si intervalle est inclus dans df_productions 
-        #2e chose : Selon contraintes du client, calculer l'autoconsommation dans creanau. 
-        #3e chose : Renvoyer cet autoconsommation. 
-        pass 
-    def is_plan_safe(self, client : Client, df_decisions : pd.DataFrame, temp_initial) :
-        #1e chose : On checke si df_decisions respecte la convention Horizon/pas. 
-        #2e chose : temp_initial est-elle une température réaliste? 
-        #3e chose : On regarde si le plan est sûr? 
-        #4e chose : Retourne un booléen. 
-        pass 
+        return trajectory
+    
+    def trajectory_of_client_standard(self, 
+                            client : Client, 
+                            instant_initial : datetime, 
+                            temp_initial : float, 
+                            df_productions : pd.DataFrame, 
+                            mode_WH : StandardWHType = None, 
+                            Temp_consigne : float = None ) :
+        try :
+            df_normalized = self._normalise_df(df_productions, instant_initial)
+        except ValueError :
+            raise WeatherNotValid("Le dataframe de la productions n'est pas valide.")
+        
+        production_array = self._to_array(df_normalized)
+        sys_config = SystemConfig.from_client(client = client) 
+        ext_context = ExternalContext.from_client(client = client, 
+                                                  date_heure=instant_initial, 
+                                                  solar_productions= production_array, 
+                                                  horizon=self.horizon,
+                                                  pas_temps=self.pas) 
+        trajectory = TrajectorySystem.generate_standard_trajectory(ext_context,sys_config,temp_initial,mode_WH, Temp_consigne) 
+        return trajectory 
+    
+    def trajectory_of_client_router(self, 
+                            client : Client, 
+                            instant_initial : datetime, 
+                            temp_initial : float, 
+                            df_productions : pd.DataFrame, 
+                            router_mode : RouterMode = None, 
+                            Temp_consigne : float = None ) :
+        try :
+            df_normalized = self._normalise_df(df_productions, instant_initial)
+        except ValueError :
+            raise WeatherNotValid("Le dataframe de la productions n'est pas valide.")
+        
+        production_array = self._to_array(df_normalized)
+        sys_config = SystemConfig.from_client(client = client) 
+        ext_context = ExternalContext.from_client(client = client, 
+                                                  date_heure=instant_initial, 
+                                                  solar_productions= production_array, 
+                                                  horizon=self.horizon,
+                                                  pas_temps=self.pas) 
+        trajectory = TrajectorySystem.generate_router_only_trajectory(ext_context,sys_config,temp_initial, router_mode, Temp_consigne) 
 
+        return trajectory 
+        
+    
     def _is_df_valid(self, df: pd.DataFrame, start: datetime, end: datetime) -> bool:
         """
         Vérifie si le DataFrame couvre bien l'intervalle absolu [start, end] avec un pas cohérent.
@@ -217,7 +245,6 @@ class OptimiserService :
 
         return df_final
     
-
     def _is_temperature_realistic(self, temperature) :
         """Renvoie une erreur si la température n'est pas réaliste, sinon, elle renvoie true.
         Args : 
@@ -236,3 +263,39 @@ class OptimiserService :
         
 
 
+    def _to_array(self, df_normalized: pd.DataFrame) -> np.ndarray:
+        """
+        Convertit le DataFrame normalisé en un numpy array (vecteur ligne).
+        
+        Args :
+            df_normalized (pd.DataFrame): Le DataFrame temporellement aligné.
+        
+        Returns :
+            np.ndarray : Un tableau numpy de dimension (1, N).
+            
+        Raises :
+            ValueError : Si le DataFrame est vide ou contient des données corrompues (NaN/Inf).
+        """
+        # 1. Check basique : Est-ce que le DF contient des données ?
+        if df_normalized is None or df_normalized.empty:
+            raise ValueError("Impossible de convertir : Le DataFrame normalisé est vide.")
+
+        # 2. Extraction des valeurs
+        # On part du principe que la donnée pertinente est dans la première colonne
+        # (indépendamment du nom de la colonne : 'production', 'watts', etc.)
+        try:
+            # .to_numpy() extrait les données brutes
+            flat_data = df_normalized.iloc[:, 0].to_numpy(dtype=float)
+        except IndexError:
+            raise ValueError("Le DataFrame ne contient aucune colonne de données.")
+
+        # 3. Check d'intégrité mathématique
+        # Même si _normalise_df fait des bfill/ffill, on s'assure qu'on n'envoie pas de NaN au Solver
+        if not np.isfinite(flat_data).all():
+            raise ValueError("Le vecteur de production contient des valeurs NaN ou infinies.")
+
+        # 4. Formatage en vecteur ligne (1, N)
+        # flat_data est de forme (N,). reshape(1, -1) le transforme en (1, N).
+        row_vector = flat_data.reshape(1, -1)
+
+        return row_vector

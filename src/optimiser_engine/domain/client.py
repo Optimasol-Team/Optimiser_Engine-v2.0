@@ -1,8 +1,8 @@
-from consignes_models import Planning
-from constraints import Constraints 
-from features_models import Features
-from prices_model import Prices
-from water_heater_model import WaterHeater 
+from .consignes_models import Planning
+from .constraints import Constraints 
+from .features_models import Features
+from .prices_model import Prices
+from .water_heater_model import WaterHeater 
 
 
 class Client :

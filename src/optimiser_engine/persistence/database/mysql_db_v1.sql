@@ -88,10 +88,20 @@ CREATE TABLE `plages_interdites` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- NOUVELLE VERSION DE LA TABLE CONSTRAINTS.(Compatible)
+CREATE TABLE `constraints` (
+  `constraint_id` int NOT NULL AUTO_INCREMENT,
+  `client_id` int DEFAULT NULL,
+  `temperature_minimale` decimal(5,2) DEFAULT 10.0, -- J'ai augmenté (5,2) car (2,2) limite à 99.99 ce qui est juste
+  `profil_conso_json` JSON DEFAULT NULL,            -- <--- UTILISATION DU TYPE NATIF JSON DE MYSQL
+  PRIMARY KEY (`constraint_id`),
+  KEY `client_id` (`client_id`),
+  CONSTRAINT `constraints_ibfk_1` FOREIGN KEY (`client_id`) REFERENCES `clients` (`client_id`)
+) ENGINE=InnoDB ...;
 -- Table structure for table `constraints`
 --
 
-DROP TABLE IF EXISTS `constraints`;
+/* DROP TABLE IF EXISTS `constraints`; Les contraintes supprimées (voir en faut, anciennes) 
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `constraints` (
@@ -103,7 +113,7 @@ CREATE TABLE `constraints` (
   KEY `client_id` (`client_id`),
   CONSTRAINT `constraints_ibfk_1` FOREIGN KEY (`client_id`) REFERENCES `clients` (`client_id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=123 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET character_set_client = @saved_cs_client */; */
 
 --
 -- Table structure for table `features`

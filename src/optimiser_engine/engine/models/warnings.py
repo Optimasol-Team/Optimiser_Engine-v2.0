@@ -1,0 +1,2 @@
+class UpdateRequired(Warning) :
+    pass 

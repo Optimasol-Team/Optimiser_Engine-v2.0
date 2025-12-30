@@ -6,6 +6,13 @@ Auteur : @anaselb
 import sys
 from pathlib import Path
 
+################LES IMPORTS AJOUTÉS : ###################################################################  
+import sys
+import json  # <--- AJOUTER CECI
+import numpy as np # <--- AJOUTER CECI
+from ..client_models.constraints import ProfilConsommation
+########################################################################################################
+
 chemin_base = Path(__file__).parent.parent
 sys.path.append(str(chemin_base / 'client_models'))
 
@@ -80,19 +87,49 @@ class ClientManager :
                             f"Interruption complète de l'insertion.\n"
                             f"Erreur SQLite: {e}"
                         ) from e
-                    
+
+            ################# BLOC DE CONSTRAINTS AJOUTÉ ######################## : 
             # Table 'constraints'
             self.db.create_table_constraints()
+            contraint_id = None # Initialisation importante
             if client.contraintes:
-                donnees_client = (client.client_id, client.contraintes.temperature_minimale(), 
-                                  client.contraintes.puissance_maison())
+                # 1. On récupère la matrice numpy (le tableau de chiffres)
+                matrice_numpy = client.contraintes.planning_consommation.data
+                
+                # 2. On la transforme en texte JSON pour la BDD
+                # .tolist() transforme le numpy array en liste Python standard
+                profil_json = json.dumps(matrice_numpy.tolist())
+
+                # 3. On prépare les données (Notez qu'on utilise profil_json au lieu de puissance)
+                donnees_constraints = (client.client_id, 
+                                     client.contraintes.temperature_minimale, 
+                                     profil_json)
                 try:
+                    # ATTENTION: J'ai changé le nom de la colonne dans la requête SQL ci-dessous
                     cursor.execute("""
                     INSERT OR IGNORE INTO constraints 
-                    (client_id, temperature_minimale, puissance_maison) 
+                    (client_id, temperature_minimale, profil_conso_json) 
                     VALUES (?, ?, ?)
-                """, donnees_client)
-                    contraint_id = cursor.lastrowid()
+                """, donnees_constraints)
+                    
+                    contraint_id = cursor.lastrowid
+                
+
+
+            #Ancienne table supprimée : ##################################################################
+            # Table 'constraints'
+            #
+            # if client.contraintes:
+                #donnees_client = (client.client_id, client.contraintes.temperature_minimale(), 
+                                  #client.contraintes.puissance_maison())
+                #try:
+                   # cursor.execute("""
+                    #INSERT OR IGNORE INTO constraints 
+                    #(client_id, temperature_minimale, puissance_maison) 
+                    #VALUES (?, ?, ?)
+                #""", donnees_client)
+                   # contraint_id = cursor.lastrowid() 
+#############################################################################################################
 
             # Table 'plages_interdites'
                     self.db.create_table_plages_interdites()
@@ -274,12 +311,28 @@ class ClientManager :
             ####################################################################################################
             #  Exécuter la requête SQL pour trouver les donnees de la table 'constraints' et 'plages_interdites'
             ####################################################################################################
+            
+            #BOLC AJOUTÉ : CONSTRAINTS : ##############################################################
             curseur.execute(
-                """SELECT ct.temperature_minimale, ct.puissance_maison, pi.heure_debut, pi.heure_fin
+                """SELECT ct.temperature_minimale, ct.profil_conso_json, pi.heure_debut, pi.heure_fin
                 FROM constraints ct LEFT JOIN plages_interdites pi ON pi.constraint_id = ct.constraint_id
                 WHERE ct.client_id=?""", (client_id,)
                 )
+            #######################FIN DU BLOC#####################################################
             
+            
+            ################################ANCIEN BLOC : ###########################################
+            #curseur.execute(
+               # """SELECT ct.temperature_minimale, ct.puissance_maison, pi.heure_debut, pi.heure_fin
+              #  FROM constraints ct LEFT JOIN plages_interdites pi ON pi.constraint_id = ct.constraint_id
+              #  WHERE ct.client_id=?""", (client_id,)
+              #  )
+            ###########################################################################################@
+
+
+
+
+
             # Récupérer tous les résultats
             enregistrements = curseur.fetchall()
             
@@ -385,16 +438,68 @@ class ClientManager :
                                                             consigne['temperature'], consigne['volume']))
                 planning_reconstruit.consignes(list_points_consign)
 
-            # Partie Constraints
+            #NOUVELLE PARTIE CONTRAINTES ###############################################################################
+            #---------------------------------------------------------------------------------------------------------######
+            # Partie Constraints (VERSION CORRIGÉE JSON)
+            # Note: Assurez-vous d'avoir "from client_models import ProfilConsommation" en haut
+            
+            constraints_reconstruit = None
+            
             if list_donnes_constraints:
+                # 1. Gestion des Plages Interdites
                 list_creneaux = []
                 for constraint in list_donnes_constraints:
-                    list_creneaux.append(Creneau(constraint['heure_debut'], constraint['heure_fin']))
-                constraint = list_donnes_constraints[0]
-                constraints_reconstruit = Constraints(list_creneaux, constraint['temperature_minimale'],
-                                                      constraint['puissance_maison'])
+                    # Vérification de sécurité si les champs sont non-nuls
+                    if constraint['heure_debut'] and constraint['heure_fin']:
+                        # Conversion robuste str -> time
+                        h_debut = constraint['heure_debut']
+                        if isinstance(h_debut, str): 
+                            h_debut = datetime.strptime(h_debut, '%H:%M:%S').time()
+                            
+                        h_fin = constraint['heure_fin']
+                        if isinstance(h_fin, str): 
+                            h_fin = datetime.strptime(h_fin, '%H:%M:%S').time()
+                            
+                        list_creneaux.append(Creneau(h_debut, h_fin))
+                
+                info_constraint = list_donnes_constraints[0]
+                
+                # 2. Gestion du Profil de Consommation (Lecture du JSON)
+                json_text = info_constraint['profil_conso_json']
+                
+                if json_text:
+                    # On transforme le texte JSON de la BDD en objet ProfilConsommation
+                    data_list = json.loads(json_text)
+                    matrice_numpy = np.array(data_list)
+                    profil_objet = ProfilConsommation(matrice_7x24=matrice_numpy)
+                else:
+                    profil_objet = ProfilConsommation() # Profil par défaut si vide
+                
+                # 3. Création de l'objet final
+                # L'ordre des arguments respecte maintenant votre constraints.py
+                constraints_reconstruit = Constraints(
+                    planning_cons=profil_objet,
+                    plages_interdites=list_creneaux,
+                    temp_minimale=info_constraint['temperature_minimale']
+                )
             else:
+                # Si le client n'a aucune contrainte en BDD
                 constraints_reconstruit = Constraints()
+
+
+
+
+
+            # Partie Constraints - en commentaires (à supprimer) : 
+            #if list_donnes_constraints:
+              #  list_creneaux = []
+               # for constraint in list_donnes_constraints:
+                 #   list_creneaux.append(Creneau(constraint['heure_debut'], constraint['heure_fin']))
+                #constraint = list_donnes_constraints[0]
+                #constraints_reconstruit = Constraints(list_creneaux, constraint['temperature_minimale'],
+                                                      #constraint['puissance_maison'])
+           # else:
+                #constraints_reconstruit = Constraints()
 
             # Partie Features
             if donnes_client['gradation'] == 1:
