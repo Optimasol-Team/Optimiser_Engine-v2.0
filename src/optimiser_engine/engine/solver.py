@@ -1,3 +1,7 @@
+"""Solver orchestration for optimisation problems using SciPy backends.
+
+Author: @anaselb
+"""
 import numpy as np
 from scipy.optimize import linprog, milp, LinearConstraint, Bounds
 
@@ -9,15 +13,44 @@ from ..domain.features_models import OptimizationMode
 
 class Solver:
     """
-    Classe du modèle d'un solveur.
-    Gère la résolution mathématique via Scipy (Linprog pour continu, MILP pour mixte).
+    Handles mathematical optimisation of trajectories using SciPy linprog or MILP routines.
     """ 
     
     def __init__(self, timeout=60):
+        """
+        Create a solver instance with an optional time limit.
+
+        Parameters
+        ----------
+        timeout : int
+            (délai maximum) Maximum allowed solving time in seconds.
+
+        Returns
+        -------
+        None
+            (aucun retour) Initializes solver settings.
+        """
         self.timeout = timeout
 
     def solve(self, inputs: OptimizationInputs) -> TrajectorySystem:
-        """Fonction qui résout le problème d'optimisation""" 
+        """
+        Solve the optimisation problem defined by the provided inputs.
+
+        Parameters
+        ----------
+        inputs : OptimizationInputs
+            (données d'optimisation) Structured matrices, bounds, and context for the solver.
+
+        Returns
+        -------
+        TrajectorySystem
+            (trajectoire optimisée) Completed trajectory populated with solver results.
+
+        Raises
+        ------
+        RuntimeError
+            (échec du solveur) If the underlying optimisation routine does not converge.
+        """ 
         
         # 1. Extraction des matrices
         A_eq = inputs.A_eq() 
@@ -72,7 +105,7 @@ class Solver:
         
         # 4. Construction de la Trajectoire
         # On utilise le constructeur standard ou la factory si disponible
-        traj = TrajectorySystem(inputs.system_config, inputs.contexte, inputs.temp_initial) 
+        traj = TrajectorySystem(inputs.system_config, inputs.context, inputs.initial_temperature) 
         
         # ÉTAPE CLÉ 1 : On passe en mode "Solveur en cours" (Droit d'écriture)
         traj.make_solver_traj() 
@@ -86,13 +119,11 @@ class Solver:
         # Si mode AUTOCONS, tu pourrais vouloir uploader le score d'autoconsommation si prévu
         
         # ÉTAPE CLÉ 2 : On passe en mode "Livré" (Verrouillage final)
-        traj.make_solver_livred_traj() 
+        traj.make_solver_delivered_traj() 
         
         return traj
 
         
-
-
 
 
 

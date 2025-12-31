@@ -1,6 +1,6 @@
-"""
-Fichier implémentant la classe TrajectorySystem. C'est la structure de données des trajectoires
-Auteur : @anaselb
+"""Trajectory data structures and helpers for optimisation outputs.
+
+Author: @anaselb
 """ 
 
 from enum import Enum 
@@ -13,67 +13,147 @@ from .warnings import UpdateRequired
 import warnings 
 
 class TrajectorySource(Enum) :
-    """Une lite de modes pour la trajectoire"""
+    """
+    Modes describing how a trajectory was produced or is being modified.
+    """
 
     MANUAL = "Manuel"                     # Mode par défaut. 
     SOLVER = "Solveur (Interne)"          # État solveur, le solveur a plus de droits de modifications. 
-    SOLVER_LIVRED = "Optimisé (Verrouillé)" # Résultat final du solveur. X est bloqué en écriture.
+    SOLVER_DELIVERED = "Optimisé (Verrouillé)" # Résultat final du solveur. X est bloqué en écriture.
     STANDARD = "Standard (Thermostat)"    # Simulation sans intelligence sans routeur. 
     STANDARD_ROUTER = "Standard + Routeur" # Simulation avec routeur basique. 
 
 class StandardWHType(Enum) :
     """
-    Une liste de modes pour le chauffe-eau : 
-    - CONSIGNE : Pour une résistance classique + thermostat. 
-    - CONSIGNE_HC : Pour un chauffe-eau qui s'allume uniquement pendant les HC. 
+    Supported thermostat-driven strategies for standard water heater simulations.
     """
-    CONSIGNE = "Consigne"                 #Une consigne de température à suivre par le thermostat. 
-    CONSIGNE_HC = "Consigne_hc"           #Même principe mais chauffage autorisé uniquement lors des heures creuses. 
+    SETPOINT = "Consigne"                 #Une consigne de température à suivre par le thermostat. 
+    SETPOINT_OFF_PEAK = "Consigne_hc"           #Même principe mais chauffage autorisé uniquement lors des heures creuses. 
 
 
 class RouterMode(Enum):
     """
-    Modes de fonctionnement du routeur solaire (PV-Router).
+    Operating strategies for the PV router simulations.
     """
     SELF_CONSUMPTION_ONLY = "Autoconsommation Pure" # Utilise uniquement le surplus solaire (Risque d'eau froide).
     COMFORT = "Confort (Solaire + Appoint Nuit)"    # Solaire le jour + Complément réseau en Heures Creuses si nécessaire.
 
 
 class TrajectorySystem :
-    """Classe implémentant la trajectoire du système. """
+    """
+    Represents a complete optimisation trajectory, including decisions and resulting flows.
+
+    Attributes
+    ----------
+    config_system : SystemConfig
+        (configuration système) Static configuration of the water heater.
+    context : ExternalContext
+        (contexte externe) Forecast data and constraints aligned to the horizon.
+    initial_temperature : float
+        (température initiale) Starting tank temperature in Celsius.
+    x : numpy.ndarray
+        (pilotage) Control vector of decisions across the horizon.
+    X : numpy.ndarray
+        (vecteur complet) Combined vector of decisions, temperatures, imports, and exports.
+    cost : float
+        (coût) Optional cached cost value for the trajectory.
+    self_consumption : float
+        (taux d'autoconsommation) Cached self-consumption ratio if computed.
+    """
     def __init__(self, 
                  config_system : SystemConfig = None,   #La config système. 
                  context : ExternalContext = None,      #Le external context
-                 temp_initial : float = None,           #La température initiale. 
+                 initial_temperature : float = None,           #La température initiale. 
                  x : np.ndarray = None                  #Le vecteur des décisions x. 
                  ) :
+        """
+        Initialize a trajectory container with optional configuration and decision vector.
+
+        Parameters
+        ----------
+        config_system : SystemConfig, optional
+            (configuration système) Static system configuration.
+        context : ExternalContext, optional
+            (contexte externe) Forecast data and constraints for the horizon.
+        initial_temperature : float, optional
+            (température initiale) Starting tank temperature in Celsius.
+        x : numpy.ndarray, optional
+            (pilotage initial) Decision vector to seed the trajectory.
+
+        Returns
+        -------
+        None
+            (aucun retour) Prepares internal storage for trajectory data.
+        """
         self._mode = TrajectorySource.MANUAL  
         self.config_system = config_system 
         self.context = context
-        self.temp_initial = temp_initial  
+        self.initial_temperature = initial_temperature  
         self._X = None 
         self.x = x
         self._cost = None 
-        self._autocons = None 
+        self._self_consumption = None 
 
     @property 
     def context(self) :
-        return self._contexte 
+        """
+        External context associated with the trajectory.
+
+        Returns
+        -------
+        ExternalContext or None
+            (contexte externe) Context aligned to the decision horizon.
+        """
+        return self._context 
     @context.setter 
-    def context(self, contexte) :
-        if contexte is None :
-            self._contexte = None 
+    def context(self, context_value) :
+        """
+        Set the external context with type enforcement.
+
+        Parameters
+        ----------
+        context_value : ExternalContext or None
+            (contexte externe) Context carrying forecasts and constraints.
+
+        Returns
+        -------
+        None
+            (aucun retour) Updates the stored context.
+
+        Raises
+        ------
+        TypeError
+            (type invalide) If the provided value is not an ExternalContext instance.
+        """
+        if context_value is None :
+            self._context = None 
         else :
-            if not isinstance(contexte,ExternalContext) :
+            if not isinstance(context_value,ExternalContext) :
                 raise TypeError("Le contexte doit être soit vide (None) soit une variable de type ExternalContext") 
-            self._contexte = contexte 
+            self._context = context_value 
         
     @property
     def X(self) :
+        """
+        Full trajectory vector concatenating decisions, temperatures, imports, and exports.
+
+        Returns
+        -------
+        numpy.ndarray or None
+            (vecteur complet) Combined optimisation variables.
+        """
         return self._X 
    
     @property
     def x(self) :
+        """
+        Decision vector extracted from the full trajectory.
+
+        Returns
+        -------
+        numpy.ndarray or None
+            (pilotage) Control values over the horizon.
+        """
         if self._X is None or self.context is None :
             return None 
         N = self.context.N
@@ -81,13 +161,41 @@ class TrajectorySystem :
     
     @x.setter 
     def x(self, valeur) :
+        """
+        Set the decision vector while validating permissions, type, and bounds.
+
+        Parameters
+        ----------
+        valeur : numpy.ndarray or None
+            (pilotage) Decision values between 0 and 1 for each step.
+
+        Returns
+        -------
+        None
+            (aucun retour) Updates the trajectory decisions and resets cached metrics.
+
+        Raises
+        ------
+        PermissionDeniedError
+            (modification interdite) If the trajectory is locked.
+        ContextNotDefined
+            (contexte manquant) If no context is set when assigning decisions.
+        NotEnoughVariables
+            (configuration manquante) If system configuration is missing.
+        TypeError
+            (type invalide) If the provided value is not a numpy array.
+        DimensionNotRespected
+            (dimension incorrecte) If the vector length does not match the horizon.
+        ValueError
+            (valeur invalide) If decisions fall outside [0, 1] or violate non-gradation mode.
+        """
         #Vérification des autorisations : 
-        if self._mode == TrajectorySource.SOLVER_LIVRED :
+        if self._mode == TrajectorySource.SOLVER_DELIVERED :
             raise PermissionDeniedError("Vous n'avez pas le droit de modifier une trajectoire livrée par le solveur") 
         if valeur is None :
             self._X = None 
             self._cost = None 
-            self._autocons = None 
+            self._self_consumption = None 
             return 
         #Vérification du contexte : 
         #Rappel : le contexte peut être None, mais s'il est pas None, il est forcément de la classe ExtenralContext
@@ -118,7 +226,7 @@ class TrajectorySystem :
         a = np.full(3*N+1, np.nan, dtype=float)  
         self._X = np.concatenate((valeur.astype(float), a))
         self._cost = None 
-        self._autocons = None 
+        self._self_consumption = None 
         warnings.warn("La partie décisions (x) du vecteur objectif X a été modifiée avec succès. " \
         "Toutefois, il faut lancer la fonction update_X() afin de mettre à jour les autres éléments de X." \
         "Ceux-ci sont vides en ce moment (np.nan)", UpdateRequired) 
@@ -126,9 +234,35 @@ class TrajectorySystem :
     
     @property 
     def config_system(self) :
+        """
+        Static system configuration used for the trajectory.
+
+        Returns
+        -------
+        SystemConfig or None
+            (configuration système) Configuration applied to calculations.
+        """
         return self._sys_config 
     @config_system.setter 
     def config_system(self, cfg) :
+        """
+        Set the static configuration with type validation.
+
+        Parameters
+        ----------
+        cfg : SystemConfig or None
+            (configuration système) Configuration describing heater capabilities.
+
+        Returns
+        -------
+        None
+            (aucun retour) Stores the provided configuration.
+
+        Raises
+        ------
+        TypeError
+            (type invalide) If the value is not None or a SystemConfig instance.
+        """
         if cfg is None :
             self._sys_config = None 
         else : 
@@ -137,28 +271,65 @@ class TrajectorySystem :
             self._sys_config = cfg
 
     @property 
-    def temp_initial(self) :
-        return self._t_init 
-    @temp_initial.setter 
-    def temp_initial(self, valeur) :
+    def initial_temperature(self) :
+        """
+        Starting water temperature for the trajectory.
+
+        Returns
+        -------
+        float or None
+            (température initiale) Initial tank temperature in Celsius.
+        """
+        return self._initial_temp 
+    @initial_temperature.setter 
+    def initial_temperature(self, valeur) :
+        """
+        Define the initial temperature with validation.
+
+        Parameters
+        ----------
+        valeur : float or None
+            (température initiale) Starting temperature in Celsius.
+
+        Returns
+        -------
+        None
+            (aucun retour) Updates the initial temperature.
+
+        Raises
+        ------
+        TypeError
+            (type invalide) If the value is not numeric when provided.
+        ValueError
+            (température invalide) If outside the 0–100°C range.
+        """
         if valeur is None :
-            self._t_init = None 
+            self._initial_temp = None 
             return 
         if not isinstance(valeur, (int,float)) :
             raise TypeError("La température doit être un nombre")
         if valeur < 0 or valeur > 100 :
             raise ValueError("Veuillez entrer une température d'eau liquide valide")
-        self._t_init = valeur 
+        self._initial_temp = valeur 
 
     def update_X(self):
         """
-        Calcule les conséquences physiques (T, I, E) du pilotage (x).
-        Met à jour self._X et remplace les np.nan par les vraies valeurs.
+        Recompute full trajectory variables (temperatures, imports, exports) from decisions.
+
+        Returns
+        -------
+        None
+            (aucun retour) Updates the internal X vector and clears cached metrics.
+
+        Raises
+        ------
+        NotEnoughVariables
+            (variables manquantes) If required configuration, context, or initial temperature is absent.
         """
         # 1. Vérifications de base
         if self._X is None:
             raise NotEnoughVariables("Le vecteur x n'est pas défini.")
-        if self.config_system is None or self.context is None or self.temp_initial is None:
+        if self.config_system is None or self.context is None or self.initial_temperature is None:
             raise NotEnoughVariables("Variables manquantes (Config, Contexte ou T_init) pour le calcul.")
 
         N = self.context.N
@@ -175,7 +346,7 @@ class TrajectorySystem :
         
         # --- B. CALCUL THERMIQUE (Boucle de simulation) ---
         T_vec = np.zeros(N + 1)
-        T_vec[0] = self.temp_initial
+        T_vec[0] = self.initial_temperature
         
         # Préparation des constantes
         V = self.config_system.volume
@@ -186,7 +357,7 @@ class TrajectorySystem :
         K_gain = (self.config_system.power * dt_sec) / (V * Cp)
         
         # Perte en °C pour UN pas de temps (Coefficient en °C/min * nombre de minutes)
-        perte_par_pas = self.config_system.C_pertes * step_min # CORRECTION ICI
+        loss_per_step = self.config_system.heat_loss_coefficient * step_min # CORRECTION ICI
         
         T_cold = self.config_system.T_cold_water
         rho_vec = self.context.water_draws / V
@@ -197,7 +368,7 @@ class TrajectorySystem :
             x_val = x_decisions[t]
             
             # Formule linéaire : Mélange + Chauffe - Pertes du pas
-            T_next = T_prev * (1 - rho) + (rho * T_cold) + (K_gain * x_val) - perte_par_pas
+            T_next = T_prev * (1 - rho) + (rho * T_cold) + (K_gain * x_val) - loss_per_step
             
             # Sécurité physique (L'eau ne descend pas en dessous de l'eau froide)
             T_vec[t+1] = max(T_next, T_cold)
@@ -208,27 +379,57 @@ class TrajectorySystem :
         
         # On invalide les caches de coût et d'autoconsommation pour forcer le recalcul
         self._cost = None
-        self._autocons = None
+        self._self_consumption = None
    
     def make_solver_traj(self) :
         """
-        Fonction permettant de modofier le mode de la trajectoire en SOLVER.
-         Le but est que le solveur puisse accéder aux éléments internes et les modifier. 
+        Switch the trajectory mode to SOLVER to permit solver updates.
+
+        Returns
+        -------
+        None
+            (aucun retour) Grants solver-level modification rights.
         """
         self._mode = TrajectorySource.SOLVER
 
-    def make_solver_livred_traj(self) :
+    def make_solver_delivered_traj(self) :
         """
-        Fonction permettant de modofier le mode de la trajectoire en SOLVER_LIVRED.
-         Le but est que le solveur puisse verrouiller sa trajectoire. 
+        Lock the trajectory after solver delivery.
+
+        Returns
+        -------
+        None
+            (aucun retour) Prevents further modifications to the trajectory vector.
         """
-        self._mode = TrajectorySource.SOLVER_LIVRED
+        self._mode = TrajectorySource.SOLVER_DELIVERED
 
     
     def upload_X_vector(self, x : np.ndarray) :
+        """
+        Inject a fully computed trajectory vector produced externally.
+
+        Parameters
+        ----------
+        x : numpy.ndarray
+            (vecteur complet) Full concatenated vector of size 4N+1.
+
+        Returns
+        -------
+        None
+            (aucun retour) Stores the provided vector and clears cached metrics.
+
+        Raises
+        ------
+        PermissionDeniedError
+            (modification interdite) If the trajectory is not in solver mode.
+        TypeError
+            (type invalide) If the provided value is not a numpy array.
+        DimensionNotRespected
+            (dimension incorrecte) If the vector length does not match 4N+1.
+        """
 
         #Vérification de l'autorisation : 
-        if self._mode == TrajectorySource.MANUAL or self._mode == TrajectorySource.SOLVER_LIVRED :
+        if self._mode == TrajectorySource.MANUAL or self._mode == TrajectorySource.SOLVER_DELIVERED :
             raise PermissionDeniedError("Vous n'êtes pas autorisés à modifier le vecteur objectif X")
         
         #Vérification du type de x : 
@@ -243,12 +444,31 @@ class TrajectorySystem :
         #Maintenant tout est vérifié : 
         self._X = x 
         self._cost = None
-        self._autocons = None 
+        self._self_consumption = None 
 
     def upload_cost(self, cost) :
-        """Fonction qui permet au solveur d'ajuster le coût de la trajectoire sans avoir à la recalculer en interne""" 
+        """
+        Allow the solver to set the cost without recomputation.
+
+        Parameters
+        ----------
+        cost : float
+            (coût) Total cost computed by the solver.
+
+        Returns
+        -------
+        None
+            (aucun retour) Caches the provided cost value.
+
+        Raises
+        ------
+        PermissionDeniedError
+            (modification interdite) If the trajectory is not in solver mode.
+        TypeError
+            (type invalide) If the cost is not numeric.
+        """ 
         #Vérifier l'autorisation : 
-        if self._mode == TrajectorySource.MANUAL or self._mode == TrajectorySource.SOLVER_LIVRED :
+        if self._mode == TrajectorySource.MANUAL or self._mode == TrajectorySource.SOLVER_DELIVERED :
             raise PermissionDeniedError("Vous n'êtes pas autorisés à modifier le cout de la trajectoire à partir de cette fonction") 
         if not isinstance(cost,(int,float)) :
             raise TypeError("Le type du coût doit être un nombre") 
@@ -256,9 +476,30 @@ class TrajectorySystem :
 
     ###Les gets sur les parties du X###############################
     def get_decisions(self) :
+        """
+        Retrieve the decision vector from the trajectory.
+
+        Returns
+        -------
+        numpy.ndarray or None
+            (pilotage) Control values across the horizon.
+        """
         return self.x 
     
     def get_temperatures(self) :
+        """
+        Extract the temperature segment from the full trajectory vector.
+
+        Returns
+        -------
+        numpy.ndarray or None
+            (températures) Temperatures for each step including the initial point.
+
+        Raises
+        ------
+        DimensionNotRespected
+            (dimension incorrecte) If the stored vector length does not follow 4N+1 format.
+        """
         A = self.X 
         if A is None :
             return None 
@@ -268,7 +509,20 @@ class TrajectorySystem :
         N = (B-1)//4 
         return self.X[N:2*N+1] 
     
-    def get_exportations(self) :
+    def get_exports(self) :
+        """
+        Extract the export vector from the trajectory.
+
+        Returns
+        -------
+        numpy.ndarray or None
+            (exportations) Energy exported at each step.
+
+        Raises
+        ------
+        DimensionNotRespected
+            (dimension incorrecte) If the stored vector length does not follow 4N+1 format.
+        """
         A = self.X 
         if A is None :
             return None 
@@ -279,7 +533,20 @@ class TrajectorySystem :
         N = (B-1)//4 
         return self.X[3*N+1:4*N+1] 
     
-    def get_importations(self) :
+    def get_imports(self) :
+        """
+        Extract the import vector from the trajectory.
+
+        Returns
+        -------
+        numpy.ndarray or None
+            (importations) Energy imported at each step.
+
+        Raises
+        ------
+        DimensionNotRespected
+            (dimension incorrecte) If the stored vector length does not follow 4N+1 format.
+        """
         A = self.X 
         if A is None :
             return None 
@@ -292,7 +559,24 @@ class TrajectorySystem :
     ###################################################################
 
     def compute_cost(self) :
-        if self._mode == TrajectorySource.SOLVER_LIVRED :
+        """
+        Calculate the monetary cost of the trajectory using context prices.
+
+        Returns
+        -------
+        float
+            (coût) Total cost in currency units over the horizon.
+
+        Raises
+        ------
+        ContextNotDefined
+            (contexte manquant) If no context is attached to the trajectory.
+        NotEnoughVariables
+            (variables manquantes) If price vectors or derived flows are unavailable.
+        DimensionNotRespected
+            (dimension incorrecte) If vector dimensions do not match the horizon length.
+        """
+        if self._mode == TrajectorySource.SOLVER_DELIVERED :
             return self._cost 
         if self._cost is not None :
             return self._cost 
@@ -319,8 +603,8 @@ class TrajectorySystem :
 
         # Récupération des importations/exportations
         try :
-            exports = self.get_exportations()
-            imports = self.get_importations()
+            exports = self.get_exports()
+            imports = self.get_imports()
         except DimensionNotRespected :
             raise DimensionNotRespected("Le vecteur X n'est pas correctement dimensionné pour extraire importations/exportations")
         # Vérifications de présence des vecteurs issus de X
@@ -339,24 +623,37 @@ class TrajectorySystem :
         return cost
     
 
-    def compute_autoconsumption(self):
+    def compute_self_consumption(self):
         """
-        Calcule le taux d'autoconsommation de la trajectoire.
-        KPI = (Energie Solaire Produite - Energie Solaire Rejetée) / Energie Solaire Produite
+        Compute the self-consumption ratio of the trajectory.
+
+        Returns
+        -------
+        float
+            (taux d'autoconsommation) Ratio of solar production consumed locally.
+
+        Raises
+        ------
+        ContextNotDefined
+            (contexte manquant) If no context is attached.
+        NotEnoughVariables
+            (variables manquantes) If exports or solar production are unavailable.
+        UpdateRequired
+            (mise à jour requise) If the trajectory needs recomputation before evaluation.
         """
-        if self._autocons is not None :
-            return self._autocons 
+        if self._self_consumption is not None :
+            return self._self_consumption 
         # 1. Vérifications (On a besoin de l'Export et de la Prod Solaire)
         if self.context is None:
             raise ContextNotDefined("Contexte manquant")
         
-        exports = self.get_exportations() # Vecteur E (Watts)
-        prod_solaire = self.context.solar_production # Vecteur P_pv (Watts)
+        exports = self.get_exports() # Vecteur E (Watts)
+        solar_production_vector = self.context.solar_production # Vecteur P_pv (Watts)
         
         # Vérifier None AVANT np.isnan()
         if exports is None:
             raise NotEnoughVariables("Les exportations ne sont pas calculées (X non initialisé)")
-        if prod_solaire is None:
+        if solar_production_vector is None:
             raise NotEnoughVariables("La production solaire (solar_production) est manquante dans le contexte")
         if np.isnan(exports).any():
             raise UpdateRequired("Veuillez lancer update_X() avant de calculer l'autoconsommation.")
@@ -365,12 +662,12 @@ class TrajectorySystem :
         # Astuce : Comme le pas de temps est constant en haut et en bas de la division, 
         # on peut travailler directement en somme de Watts, les unités s'annulent pour le ratio.
         
-        total_prod = np.sum(prod_solaire)
+        total_prod = np.sum(solar_production_vector)
         total_export = np.sum(exports)
         
         # Sécurité division par zéro (si pas de soleil, ex: nuit)
         if total_prod == 0:
-            self._autocons = 0.0
+            self._self_consumption = 0.0
             return 0.0
 
         # L'autoconsommation, c'est ce qu'on a produit MOINS ce qu'on a jeté (exporté)
@@ -381,65 +678,94 @@ class TrajectorySystem :
         ratio = autoconsom / total_prod
         
         # On stocke en interne
-        self._autocons = ratio
+        self._self_consumption = ratio
         return ratio
 
 
     @classmethod 
     def from_optimization_input(cls,inputs : OptimizationInputs) :
-        """Fonction qui instancie une trajectoire vide à partir de inputs""" 
+        """
+        Instantiate an empty trajectory using optimisation inputs.
+
+        Parameters
+        ----------
+        inputs : OptimizationInputs
+            (données d'optimisation) Input structure containing configuration and context.
+
+        Returns
+        -------
+        TrajectorySystem
+            (trajectoire) Trajectory initialized with configuration and initial temperature.
+        """ 
         config = inputs.system_config
-        contexte = inputs.contexte
-        temp_initial = inputs.temp_initial 
-        return cls(config,contexte,temp_initial) 
+        context = inputs.context
+        initial_temperature = inputs.initial_temperature 
+        return cls(config,context,initial_temperature) 
     
     @classmethod
     def generate_standard_trajectory(cls, 
                                      context : ExternalContext = None, 
                                      config_system : SystemConfig = None, 
-                                     Temp_initial : float = None, 
+                                     initial_temperature : float = None, 
                                      mode_WH : StandardWHType = None, 
-                                     Temp_consigne : float = None
+                                     setpoint_temperature : float = None
                                      ) :
         """
-        Fonction qui génère une trajectoire standard sans optimisation, sans routeur.
-        Args : 
-        - context : Pour savoir les 
-        - config_system : Nécessaire 
-        - Temp_initial : 
-        - mode_WH : 
-        - Temp_consigne : 
-        Returns : 
-        - TrajectorySystem : Une instance de la classe TrajectorySystem représentant la trajectoire suivie. 
-        Raises : 
-        - 
-        - 
+        Generate a trajectory simulating a standard thermostat-controlled heater.
 
+        Parameters
+        ----------
+        context : ExternalContext
+            (contexte externe) Forecast data required for the simulation.
+        config_system : SystemConfig
+            (configuration système) Physical parameters of the heater.
+        initial_temperature : float
+            (température initiale) Starting water temperature in Celsius.
+        mode_WH : StandardWHType, optional
+            (mode chauffe-eau) Thermostat behaviour to emulate; defaults to SETPOINT.
+        setpoint_temperature : float, optional
+            (consigne de température) Target temperature for thermostat logic.
+
+        Returns
+        -------
+        TrajectorySystem
+            (trajectoire) Simulated trajectory without optimisation.
+
+        Raises
+        ------
+        ContextNotDefined
+            (contexte manquant) If the context is not provided.
+        NotEnoughVariables
+            (variables manquantes) If required configuration or temperatures are missing.
+        TypeError
+            (type invalide) If inputs have incorrect types.
+        ValueError
+            (valeur invalide) If the provided temperatures are outside acceptable bounds.
         """
         if context is None :
             raise ContextNotDefined("Le contexte est vide, il doit être rempli L'opération ne peut pas aboutir") 
         if config_system is None :
             raise NotEnoughVariables("Les configurations système sont manquantes, l'opération ne peut pas aboutir") 
-        if Temp_initial is None :
+        if initial_temperature is None :
             raise NotEnoughVariables("La température initiale est manquante, l'opération ne peut pas aboutir.") 
-        if not isinstance(Temp_initial, (int, float)) :
+        if not isinstance(initial_temperature, (int, float)) :
             raise TypeError("La température initiale doit être un entier ou un réel.") 
-        if Temp_initial < 0 or Temp_initial > 100 :
+        if initial_temperature < 0 or initial_temperature > 100 :
             raise ValueError("Veuillez entre une température d'eau liquide valide (entre 0 et 100)") 
         
         if mode_WH is None :
-            mode_WH = StandardWHType.CONSIGNE
+            mode_WH = StandardWHType.SETPOINT
         if not isinstance(mode_WH,(StandardWHType)) :
             raise TypeError("Le mode de chauffe-eau est invalide, l'opération ne peut pas aboutir") 
         
-        if Temp_consigne is None :
+        if setpoint_temperature is None :
             #Essayons de la déduire du contexte : 
-            A = context.future_consigns 
+            A = context.future_setpoints 
             if A is None :
                 raise NotEnoughVariables("La température de consigne est manquante, et elle ne peut pas être déduite du contexte. L'opération ne peut pas aboutir.") 
-            Temp_consigne = np.max(A) 
+            setpoint_temperature = np.max(A) 
 
-        if not isinstance(Temp_consigne, (int, float)) :
+        if not isinstance(setpoint_temperature, (int, float)) :
             raise TypeError("La température de consigne doit être un nombe, l'opération ne peut pas aboutir.") 
 
         #Maintenant on possède toutes les informations, toutes les erreurs sont gérés, les valeurs vides éventuels sont remplis. 
@@ -452,7 +778,7 @@ class TrajectorySystem :
         # K_gain : Combien de degrés on gagne en chauffant à fond pendant 1 pas
         K_gain = (config_system.power * dt_sec) / (V * Cp)
         
-        C_pertes = config_system.C_pertes
+        heat_loss_coefficient = config_system.heat_loss_coefficient
         T_cold = config_system.T_cold_water
         
         # On prépare le vecteur des tirages (rho) et le signal réseau
@@ -465,25 +791,25 @@ class TrajectorySystem :
 
         # --- 2. Boucle de Simulation Temporelle (Causalité) ---
         x = np.zeros(N)
-        T_actuelle = Temp_initial # C'est notre T_i qui va évoluer
-        perte_par_pas = C_pertes * context.step_minutes
+        current_temperature = initial_temperature # C'est notre T_i qui va évoluer
+        loss_per_step = heat_loss_coefficient * context.step_minutes
         for t in range(N):
             # --- A. PRISE DE DÉCISION (Le Thermostat) ---
             
             # 1. Le besoin : Est-ce que l'eau est trop froide ?
-            besoin_chauffe = T_actuelle < Temp_consigne
+            need_heating = current_temperature < setpoint_temperature
             
             # 2. La contrainte : Est-ce que j'ai du courant ?
             # Par défaut (Mode CONSIGNE simple), on a toujours le droit
-            droit_de_chauffer = True 
+            allowed_to_heat = True 
             
             # Si on est en mode HC, on dépend du signal réseau
-            if mode_WH == StandardWHType.CONSIGNE_HC:
+            if mode_WH == StandardWHType.SETPOINT_OFF_PEAK:
                 if grid_signal[t] == 0: # 0 signifie coupure (Heures Pleines)
-                    droit_de_chauffer = False
+                    allowed_to_heat = False
             
             # 3. Action : On chauffe si Besoin ET Droit
-            if besoin_chauffe and droit_de_chauffer:
+            if need_heating and allowed_to_heat:
                 x[t] = 1
             else:
                 x[t] = 0
@@ -494,14 +820,14 @@ class TrajectorySystem :
             
             # La formule magique (Conservation de l'énergie) :
             # T_next = (Eau restante à T_actuelle) + (Eau froide entrante) + (Chauffe) - (Pertes)
-            T_next = T_actuelle * (1 - rho) + (rho * T_cold) + (K_gain * x[t]) - perte_par_pas
+            T_next = current_temperature * (1 - rho) + (rho * T_cold) + (K_gain * x[t]) - loss_per_step
     
             # Sécurité : l'eau ne peut pas être plus froide que l'eau du réseau
-            T_actuelle = max(T_next, T_cold)
+            current_temperature = max(T_next, T_cold)
 
         # --- 3. Finalisation ---
         # On crée l'objet Trajectoire avec le vecteur x qu'on vient de construire
-        traj = cls(config_system, context, Temp_initial, x)
+        traj = cls(config_system, context, initial_temperature, x)
         
         # On lance update_X() pour qu'il recalcule tout le reste proprement (Coûts, vecteurs T, I, E...)
         #traj.update_X() 
@@ -512,24 +838,43 @@ class TrajectorySystem :
     def generate_router_only_trajectory(cls, 
                                         context : ExternalContext = None, 
                                         config_system : SystemConfig = None, 
-                                        Temp_initial : float = None, 
+                                        initial_temperature : float = None, 
                                         router_mode : RouterMode = None, # Nouveau paramètre Enum
-                                        Temp_consigne : float = None
+                                        setpoint_temperature : float = None
                                         ) :
         """
-        Génère une trajectoire simulant un Routeur Solaire (type PV-Router 7-in-1).
-        
-        Logique basée sur la Fiche Technique :
-        1. Calcul du Surplus (P_solaire - P_maison).
-        2. Gradation : Le routeur envoie exactement ce surplus vers la résistance (x flottant entre 0 et 1).
-        3. Mode Confort (Optionnel) : Active la chauffe forcée (Réseau) durant les Heures Creuses 
-           si la température est insuffisante (fonction "Programmateur Jour/Nuit").
+        Simulate a trajectory driven by a solar router strategy.
+
+        Parameters
+        ----------
+        context : ExternalContext
+            (contexte externe) Forecast data for the simulation.
+        config_system : SystemConfig
+            (configuration système) Physical parameters of the heater.
+        initial_temperature : float
+            (température initiale) Starting water temperature in Celsius.
+        router_mode : RouterMode, optional
+            (mode routeur) Router behaviour to apply; defaults to comfort mode.
+        setpoint_temperature : float, optional
+            (consigne de température) Thermostat setpoint for router decisions.
+
+        Returns
+        -------
+        TrajectorySystem
+            (trajectoire) Simulated trajectory under router control.
+
+        Raises
+        ------
+        NotEnoughVariables
+            (variables manquantes) If required context or configuration is absent.
+        TypeError
+            (type invalide) If inputs are of incorrect types.
         """
         
         # --- 1. Vérifications & Initialisation ---
         if context is None or config_system is None:
              raise NotEnoughVariables("Contexte ou Configuration manquante pour la simulation routeur.")
-        if Temp_initial is None:
+        if initial_temperature is None:
              raise NotEnoughVariables("Température initiale manquante.")
         if router_mode is None:
             # Par défaut, on choisit le mode CONFORT (le plus réaliste pour un foyer normal)
@@ -543,14 +888,14 @@ class TrajectorySystem :
         
         P_nominale = config_system.power # Puissance max de la résistance (en Watts)
         K_gain = (P_nominale * dt_sec) / (V * Cp)
-        C_pertes = config_system.C_pertes
+        heat_loss_coefficient = config_system.heat_loss_coefficient
         T_cold = config_system.T_cold_water
         
         rho_vec = context.water_draws / V
         
         # Données vectorielles du Contexte
-        prod_solaire = context.solar_production
-        conso_maison = context.house_consumption # Conso basale (hors chauffe-eau)
+        solar_production_vector = context.solar_production
+        house_consumption_vector = context.house_consumption # Conso basale (hors chauffe-eau)
         
         # Récupération sécurisée du signal HC/HP (pour le mode Confort)
         grid_signal = getattr(context, 'off_peak_hours', None)
@@ -559,27 +904,27 @@ class TrajectorySystem :
             grid_signal = np.ones(N)
 
         # Déduction de la consigne (Thermostat mécanique du routeur)
-        if Temp_consigne is None:
-            Temp_consigne = config_system.T_max_safe 
+        if setpoint_temperature is None:
+            setpoint_temperature = config_system.T_max_safe 
 
         # --- 2. Boucle de Simulation (Causalité) ---
         x_vec = np.zeros(N)
         T_vec = np.zeros(N + 1)
         
-        T_actuelle = Temp_initial
-        T_vec[0] = T_actuelle
+        current_temperature = initial_temperature
+        T_vec[0] = current_temperature
         
         for t in range(N):
             # --- A. LOGIQUE DÉCISIONNELLE DU ROUTEUR ---
             
             # 1. Sécurité Thermostat (Priorité Absolue)
             # Si l'eau est déjà assez chaude, le routeur coupe tout (même le solaire).
-            if T_actuelle >= Temp_consigne:
+            if current_temperature >= setpoint_temperature:
                 x_decision = 0.0
             else:
                 # 2. Stratégie Solaire (Divertissement de surplus)
                 # Le routeur mesure le surplus net à l'instant t
-                surplus_W = prod_solaire[t] - conso_maison[t]
+                surplus_W = solar_production_vector[t] - house_consumption_vector[t]
                 
                 x_solaire = 0.0
                 if surplus_W > 0:
@@ -607,11 +952,11 @@ class TrajectorySystem :
             # --- B. CALCUL PHYSIQUE (Mise à jour de T pour t+1) ---
             rho = rho_vec[t]
             
-            perte_par_pas = C_pertes * context.step_minutes
-            T_next = T_actuelle * (1 - rho) + (rho * T_cold) + (K_gain * x_decision) - perte_par_pas
+            loss_per_step = heat_loss_coefficient * context.step_minutes
+            T_next = current_temperature * (1 - rho) + (rho * T_cold) + (K_gain * x_decision) - loss_per_step
     
-            T_actuelle = max(T_next, T_cold)
-            T_vec[t+1] = T_actuelle
+            current_temperature = max(T_next, T_cold)
+            T_vec[t+1] = current_temperature
 
         # --- 3. Construction Optimisée de l'Objet (Sans Warnings) ---
         
@@ -620,13 +965,13 @@ class TrajectorySystem :
         
         # Bilan Net au compteur : Conso Maison - Solaire + Conso CE
         # (Si le CE consomme exactement le surplus, p_net sera proche de 0)
-        p_net = conso_maison - prod_solaire + puissance_ce_W
+        p_net = house_consumption_vector - solar_production_vector + puissance_ce_W
         
         I_vec = np.maximum(0, p_net)  # Importation (Achat réseau)
         E_vec = np.maximum(0, -p_net) # Exportation (Injection réseau)
         
         # Instanciation vide pour éviter le setter public
-        traj = cls(config_system, context, Temp_initial)
+        traj = cls(config_system, context, initial_temperature)
         
         # Injection directe dans les "tripes" de l'objet
         traj._X = np.concatenate((x_vec, T_vec, I_vec, E_vec))

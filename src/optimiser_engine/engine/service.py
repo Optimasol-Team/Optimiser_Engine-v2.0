@@ -1,42 +1,89 @@
-"""Ce fichier contient la classe OptimiserService qui représente l'objet qui gère les calculs d'optimisation. 
+"""Service orchestrating optimisation steps to produce heater trajectories.
 
-Auteur : @anaselb 
+Author: @anaselb
 """ 
-from client_models import Client 
+from ..domain import Client 
 import pandas as pd
 from datetime import datetime, timedelta
 
-from models_optimiser.system_config import SystemConfig
-from models_optimiser.external_context import ExternalContext
-from models_optimiser.optimisation_inputs import OptimizationInputs
-from models_optimiser.trajectory import TrajectorySystem, StandardWHType, RouterMode
+from .models.system_config import SystemConfig
+from .models.external_context import ExternalContext
+from .models.optimisation_inputs import OptimizationInputs
+from .models.trajectory import TrajectorySystem, StandardWHType, RouterMode
 from solver import Solver 
 import numpy as np 
+from .models.Exceptions import WeatherNotValid , SolverFailed
 
-class WeatherNotValid(Exception) :
-    pass
 
-class OptimiserService :
-    pas_minimal = 5 #5 minutes. 
-    Horizon_max = 48 #48 heures. 
-    Horizon_min = 1 #Pas moins d'une heure. 
-    Temp_min_chauffe_eau = 5 #En celsius. 
-    Temp_max_chauffe_eau = 99  #En celsius. 
-    def __init__(self, horizon : float = 24, pas : float = 15) :
-        """On initilaise les objets de la classe avec un pas et un horizon. 
-        Les décisions de l'optimisation couvriront une durée = Horizon et espacés d'un pas. 
-        L'horizon doit être fourni en heures, le pas en minutes. 
+
+class OptimizerService :
+    """
+    Coordinates data preparation and solver execution for client trajectories.
+
+    Attributes
+    ----------
+    horizon : float
+        (horizon en heures) Duration of the optimisation window in hours.
+    step_minutes : float
+        (pas en minutes) Discretisation step used for the optimisation in minutes.
+    """
+    min_step_minutes = 5 #5 minutes. 
+    MAX_HORIZON_HOURS = 48 #48 heures. 
+    MIN_HORIZON_HOURS = 1 #Pas moins d'une heure. 
+    MIN_WATER_HEATER_TEMP = 5 #En celsius. 
+    MAX_WATER_HEATER_TEMP = 99  #En celsius. 
+    def __init__(self, horizon_hours : float = 24, step_minutes : float = 15) :
         """
-        self.horizon = horizon #L'horizon en heures
-        self.pas = pas         #LE pas en minutes. 
+        Initialize the service with horizon and step settings.
+
+        Parameters
+        ----------
+        horizon_hours : float, optional
+            (horizon en heures) Optimisation window length in hours.
+        step_minutes : float, optional
+            (pas en minutes) Time step used in minutes.
+
+        Returns
+        -------
+        None
+            (aucun retour) Sets the service configuration values.
+        """
+        self.horizon = horizon_hours #L'horizon en heures
+        self.step_minutes = step_minutes         #LE pas en minutes. 
     
     @property 
     def horizon(self) :
+        """
+        Optimisation horizon length in hours.
+
+        Returns
+        -------
+        float
+            (horizon en heures) Duration of the optimisation window.
+        """
         return self._horizon 
     @horizon.setter 
     def horizon(self, valeur) :
-        a = OptimiserService.Horizon_max
-        b = OptimiserService.Horizon_min
+        """
+        Set the optimisation horizon while enforcing service limits.
+
+        Parameters
+        ----------
+        valeur : float
+            (horizon en heures) Requested horizon length in hours.
+
+        Returns
+        -------
+        None
+            (aucun retour) Updates the stored horizon.
+
+        Raises
+        ------
+        ValueError
+            (horizon invalide) If the value falls outside allowed bounds.
+        """
+        a = OptimizerService.MAX_HORIZON_HOURS
+        b = OptimizerService.MIN_HORIZON_HOURS
         if b <= valeur <= a :
             self._horizon = valeur 
         else :
@@ -45,33 +92,78 @@ class OptimiserService :
 
 
     @property
-    def pas(self) :
-        return self._pas 
-    @pas.setter 
-    def pas(self,valeur) :
+    def step_minutes(self) :
+        """
+        Duration of each optimisation step in minutes.
+
+        Returns
+        -------
+        float
+            (pas en minutes) Step size for discretisation.
+        """
+        return self._step_minutes 
+    @step_minutes.setter 
+    def step_minutes(self,valeur) :
+        """
+        Set the optimisation step size with boundary checks.
+
+        Parameters
+        ----------
+        valeur : float
+            (pas en minutes) Desired step length in minutes.
+
+        Returns
+        -------
+        None
+            (aucun retour) Updates the stored step size.
+
+        Raises
+        ------
+        ValueError
+            (pas invalide) If the step exceeds half the horizon or falls below the minimum.
+        """
         if valeur/60 > self._horizon /2 :
             raise ValueError("Le pas ne doit pas dépasser la moitié de l'horizon") 
-        elif valeur < OptimiserService.pas_minimal :
-            raise ValueError(f"Le pas ne peut pas être inférieur à {OptimiserService.pas_minimal} minutes") 
+        elif valeur < OptimizerService.min_step_minutes :
+            raise ValueError(f"Le pas ne peut pas être inférieur à {OptimizerService.min_step_minutes} minutes") 
         else :
-            self._pas = valeur 
+            self._step_minutes = valeur 
 
     def trajectory_of_client(self, 
                             client : Client, 
-                            instant_initial : datetime, 
-                            temp_initial : float, 
-                            df_productions : pd.DataFrame) :
+                            start_datetime : datetime, 
+                            initial_temperature : float, 
+                            production_df : pd.DataFrame) :
         """
-        Orchestre l'optimisation :
-        1. Prépare les données (Normalisation & Extraction vecteurs)
-        2. Construit le modèle mathématique (via formalize_data)
-        3. Résout le problème (via solvers)
-        4. Formate la réponse en DataFrame
+        Run the optimisation workflow for a client using a solver-backed trajectory.
+
+        Parameters
+        ----------
+        client : Client
+            (client) Client definition containing constraints and assets.
+        start_datetime : datetime.datetime
+            (date de début) Start timestamp for the horizon.
+        initial_temperature : float
+            (température initiale) Starting water temperature in Celsius.
+        production_df : pandas.DataFrame
+            (production solaire) DataFrame of solar production indexed by datetime.
+
+        Returns
+        -------
+        TrajectorySystem
+            (trajectoire optimisée) Optimised trajectory returned by the solver.
+
+        Raises
+        ------
+        WeatherNotValid
+            (données invalides) If the production data fails validation.
+        SolverFailed
+            (échec du solveur) If the solver cannot produce a trajectory.
         """
         
         
         try :
-            df_normalized = self._normalise_df(df_productions, instant_initial)
+            df_normalized = self._normalize_df(production_df, start_datetime)
         except ValueError :
             raise WeatherNotValid("Le dataframe de la productions n'est pas valide.")
         
@@ -79,78 +171,145 @@ class OptimiserService :
         #On construit un input à partir de ça : 
         sys_config = SystemConfig.from_client(client = client) 
         ext_context = ExternalContext.from_client(client = client, 
-                                                  date_heure=instant_initial, 
+                                                  reference_datetime=start_datetime, 
                                                   solar_productions= production_array, 
                                                   horizon=self.horizon,
-                                                  pas_temps=self.pas) 
-        inputs = OptimizationInputs(sys_config, ext_context, temp_initial, client.features.mode) 
+                                                  time_step_minutes=self.step_minutes) 
+        inputs = OptimizationInputs(sys_config, ext_context, initial_temperature, client.features.mode) 
         solver = Solver() 
-
-        trajectory = solver.solve(inputs) 
+        try :
+            trajectory = solver.solve(inputs) 
+        except RuntimeError :
+            raise SolverFailed("Le solveur a échoué.")
 
         return trajectory
     
     def trajectory_of_client_standard(self, 
                             client : Client, 
-                            instant_initial : datetime, 
-                            temp_initial : float, 
-                            df_productions : pd.DataFrame, 
+                            start_datetime : datetime, 
+                            initial_temperature : float, 
+                            production_df : pd.DataFrame, 
                             mode_WH : StandardWHType = None, 
-                            Temp_consigne : float = None ) :
+                            setpoint_temperature : float = None ) :
+        """
+        Generate a standard thermostat-based trajectory without optimisation.
+
+        Parameters
+        ----------
+        client : Client
+            (client) Client definition to simulate.
+        start_datetime : datetime.datetime
+            (date de début) Reference timestamp for the simulation.
+        initial_temperature : float
+            (température initiale) Starting water temperature in Celsius.
+        production_df : pandas.DataFrame
+            (production solaire) Solar production data indexed by datetime.
+        mode_WH : StandardWHType, optional
+            (mode chauffe-eau) Thermostat strategy to emulate.
+        setpoint_temperature : float, optional
+            (consigne de température) Target temperature for thermostat logic.
+
+        Returns
+        -------
+        TrajectorySystem
+            (trajectoire simulée) Simulated trajectory under standard control.
+
+        Raises
+        ------
+        WeatherNotValid
+            (données invalides) If production data fails validation.
+        """
         try :
-            df_normalized = self._normalise_df(df_productions, instant_initial)
+            df_normalized = self._normalize_df(production_df, start_datetime)
         except ValueError :
             raise WeatherNotValid("Le dataframe de la productions n'est pas valide.")
         
         production_array = self._to_array(df_normalized)
         sys_config = SystemConfig.from_client(client = client) 
         ext_context = ExternalContext.from_client(client = client, 
-                                                  date_heure=instant_initial, 
+                                                  reference_datetime=start_datetime, 
                                                   solar_productions= production_array, 
                                                   horizon=self.horizon,
-                                                  pas_temps=self.pas) 
-        trajectory = TrajectorySystem.generate_standard_trajectory(ext_context,sys_config,temp_initial,mode_WH, Temp_consigne) 
+                                                  time_step_minutes=self.step_minutes) 
+        trajectory = TrajectorySystem.generate_standard_trajectory(ext_context,sys_config,initial_temperature,mode_WH, setpoint_temperature) 
         return trajectory 
     
     def trajectory_of_client_router(self, 
                             client : Client, 
-                            instant_initial : datetime, 
-                            temp_initial : float, 
-                            df_productions : pd.DataFrame, 
+                            start_datetime : datetime, 
+                            initial_temperature : float, 
+                            production_df : pd.DataFrame, 
                             router_mode : RouterMode = None, 
-                            Temp_consigne : float = None ) :
+                            setpoint_temperature : float = None ) :
+        """
+        Generate a trajectory using a router-only simulation strategy.
+
+        Parameters
+        ----------
+        client : Client
+            (client) Client definition to simulate.
+        start_datetime : datetime.datetime
+            (date de début) Reference timestamp for the simulation.
+        initial_temperature : float
+            (température initiale) Starting water temperature in Celsius.
+        production_df : pandas.DataFrame
+            (production solaire) Solar production data indexed by datetime.
+        router_mode : RouterMode, optional
+            (mode routeur) Router behaviour to apply.
+        setpoint_temperature : float, optional
+            (consigne de température) Thermostat setpoint for router logic.
+
+        Returns
+        -------
+        TrajectorySystem
+            (trajectoire simulée) Simulated router-based trajectory.
+
+        Raises
+        ------
+        WeatherNotValid
+            (données invalides) If production data fails validation.
+        """
         try :
-            df_normalized = self._normalise_df(df_productions, instant_initial)
+            df_normalized = self._normalize_df(production_df, start_datetime)
         except ValueError :
             raise WeatherNotValid("Le dataframe de la productions n'est pas valide.")
         
         production_array = self._to_array(df_normalized)
         sys_config = SystemConfig.from_client(client = client) 
         ext_context = ExternalContext.from_client(client = client, 
-                                                  date_heure=instant_initial, 
+                                                  reference_datetime=start_datetime, 
                                                   solar_productions= production_array, 
                                                   horizon=self.horizon,
-                                                  pas_temps=self.pas) 
-        trajectory = TrajectorySystem.generate_router_only_trajectory(ext_context,sys_config,temp_initial, router_mode, Temp_consigne) 
+                                                  time_step_minutes=self.step_minutes) 
+        trajectory = TrajectorySystem.generate_router_only_trajectory(ext_context,sys_config,initial_temperature, router_mode, setpoint_temperature) 
 
         return trajectory 
-        
+
     
     def _is_df_valid(self, df: pd.DataFrame, start: datetime, end: datetime) -> bool:
         """
-        Vérifie si le DataFrame couvre bien l'intervalle absolu [start, end] avec un pas cohérent.
+        Validate that a DataFrame covers the required interval with acceptable gaps.
 
-        Args : 
-            df (pd.DataFrame): Le DataFrame à évaluer (doit avoir un index datetime).
-            start (datetime): Début absolu de l'horizon requis.
-            end (datetime): Fin absolue de l'horizon requis.
+        Parameters
+        ----------
+        df : pandas.DataFrame
+            (données solaires) DataFrame with a datetime index or column.
+        start : datetime.datetime
+            (début) Start of the required interval.
+        end : datetime.datetime
+            (fin) End of the required interval.
 
-        Returns : 
-            bool : True si le df respecte la couverture et le pas maximum, False sinon.
+        Returns
+        -------
+        bool
+            (validité) True if coverage and sampling are acceptable, False otherwise.
 
-        Raises : 
-            TypeError : Si df n'est pas un DataFrame.
-            ValueError : Si le df ne contient pas d'index ou colonne datetime.
+        Raises
+        ------
+        TypeError
+            (type invalide) If df is not a DataFrame.
+        ValueError
+            (données invalides) If no datetime index or column exists.
         """
         # 1. Vérification des types
         if not isinstance(df, pd.DataFrame):
@@ -184,7 +343,7 @@ class OptimiserService :
         
         # Conversion des différences en minutes
         max_gap_minutes = diffs.max().total_seconds() / 60
-        limit_gap = 4 * self.pas
+        limit_gap = 4 * self.step_minutes
         
         if max_gap_minutes > limit_gap:
             # print(f"Gap temporel trop grand détecté : {max_gap_minutes} min (Limite : {limit_gap} min)")
@@ -192,37 +351,40 @@ class OptimiserService :
 
         return True
 
-    def _normalise_df(self, df: pd.DataFrame, instant_initial: datetime) -> pd.DataFrame:
+    def _normalize_df(self, df: pd.DataFrame, start_datetime: datetime) -> pd.DataFrame:
         """
-        Aligne le DataFrame sur l'horizon temporel exact du service.
-        
-        La fonction crée un index parfait allant de instant_initial à 
-        (instant_initial + horizon), avec le pas défini dans self.pas.
-        Les données sont interpolées linéairement pour combler les petits trous.
+        Align and interpolate production data to the service horizon and step.
 
-        Args : 
-            df (pd.DataFrame): Le dataframe brut à normaliser.
-            instant_initial (datetime): Le moment T0 du début de l'optimisation.
+        Parameters
+        ----------
+        df : pandas.DataFrame
+            (données solaires) Raw production data to normalise.
+        start_datetime : datetime.datetime
+            (référence temporelle) Start of the optimisation horizon.
 
-        Returns :
-            pd.DataFrame: Un nouveau DF nettoyé, ré-échantillonné et sans trous.
+        Returns
+        -------
+        pandas.DataFrame
+            (données normalisées) Cleaned and resampled DataFrame covering the full horizon.
 
-        Raises : 
-            ValueError : Si le df n'est pas valide (couverture insuffisante).
+        Raises
+        ------
+        ValueError
+            (données invalides) If the DataFrame lacks sufficient coverage or has large gaps.
         """
         # 1. Calcul de la fin absolue de l'horizon
-        fin_horizon = instant_initial + timedelta(hours=self.horizon)
+        fin_horizon = start_datetime + timedelta(hours=self.horizon)
 
         # 2. Validation de la couverture
         # On passe les bornes absolues (datetime) et non un objet Creneau
-        if not self._is_df_valid(df, instant_initial, fin_horizon):
-            raise ValueError(f"Le DataFrame fourni ne couvre pas la période {instant_initial} -> {fin_horizon} ou contient des trous > {4*self.pas} min.")
+        if not self._is_df_valid(df, start_datetime, fin_horizon):
+            raise ValueError(f"Le DataFrame fourni ne couvre pas la période {start_datetime} -> {fin_horizon} ou contient des trous > {4*self.step_minutes} min.")
 
         # 3. Création de la grille de temps cible (Target Index)
         target_index = pd.date_range(
-            start=instant_initial,
+            start=start_datetime,
             end=fin_horizon,
-            freq=f"{int(self.pas)}T" # 'T' = minutes dans Pandas
+            freq=f"{int(self.step_minutes)}T" # 'T' = minutes dans Pandas
         )
 
         # 4. Ré-échantillonnage intelligent
@@ -246,16 +408,26 @@ class OptimiserService :
         return df_final
     
     def _is_temperature_realistic(self, temperature) :
-        """Renvoie une erreur si la température n'est pas réaliste, sinon, elle renvoie true.
-        Args : 
-        - temperature : Température à évaluer. 
-        Returns : 
-        - bool : Si la température est correcte (entre self.Temp_min et self.Temp_max) -> True 
-        Raises : 
-        - ValueError : Si la température n'est pas correcte. 
+        """
+        Validate that a temperature lies within physical bounds.
+
+        Parameters
+        ----------
+        temperature : float
+            (température testée) Temperature value to evaluate.
+
+        Returns
+        -------
+        bool
+            (validité) True if the value is within configured limits.
+
+        Raises
+        ------
+        ValueError
+            (température invalide) If the temperature is outside allowed limits.
         """ 
-        a = OptimiserService.Temp_min_chauffe_eau
-        b = OptimiserService.Temp_max_chauffe_eau
+        a = OptimizerService.MIN_WATER_HEATER_TEMP
+        b = OptimizerService.MAX_WATER_HEATER_TEMP
         if  a <= temperature <= b :
             return True 
         else :
@@ -265,16 +437,22 @@ class OptimiserService :
 
     def _to_array(self, df_normalized: pd.DataFrame) -> np.ndarray:
         """
-        Convertit le DataFrame normalisé en un numpy array (vecteur ligne).
-        
-        Args :
-            df_normalized (pd.DataFrame): Le DataFrame temporellement aligné.
-        
-        Returns :
-            np.ndarray : Un tableau numpy de dimension (1, N).
-            
-        Raises :
-            ValueError : Si le DataFrame est vide ou contient des données corrompues (NaN/Inf).
+        Convert a normalised DataFrame into a row vector.
+
+        Parameters
+        ----------
+        df_normalized : pandas.DataFrame
+            (données normalisées) Time-aligned production DataFrame.
+
+        Returns
+        -------
+        numpy.ndarray
+            (vecteur production) Row vector shaped (1, N).
+
+        Raises
+        ------
+        ValueError
+            (données invalides) If the DataFrame is empty or contains invalid values.
         """
         # 1. Check basique : Est-ce que le DF contient des données ?
         if df_normalized is None or df_normalized.empty:
@@ -290,7 +468,7 @@ class OptimiserService :
             raise ValueError("Le DataFrame ne contient aucune colonne de données.")
 
         # 3. Check d'intégrité mathématique
-        # Même si _normalise_df fait des bfill/ffill, on s'assure qu'on n'envoie pas de NaN au Solver
+        # Même si _normalize_df fait des bfill/ffill, on s'assure qu'on n'envoie pas de NaN au Solver
         if not np.isfinite(flat_data).all():
             raise ValueError("Le vecteur de production contient des valeurs NaN ou infinies.")
 

@@ -10,13 +10,11 @@ from pathlib import Path
 import sys
 import json  # <--- AJOUTER CECI
 import numpy as np # <--- AJOUTER CECI
-from ..client_models.constraints import ProfilConsommation
+from ...domain import Client, Features, Planning, Constraints, Prices, WaterHeater, Setpoint, TimeSlot, ConsumptionProfile
 ########################################################################################################
 
 chemin_base = Path(__file__).parent.parent
 sys.path.append(str(chemin_base / 'client_models'))
-
-from client_models import Client, Features, Planning, Constraints, Prices, WaterHeater, PointConsign, Creneau
 from base_db import Database
 import sqlite3
 import os
@@ -68,10 +66,10 @@ class ClientManager :
             # Table 'consignes'
             self.db.create_table_consignes()
             if client.planning:
-                list_consignes = client.planning.consignes()
+                list_consignes = client.planning.setpoints
                 for consigne in list_consignes:
-                    donnees_client = (client.client_id, consigne.day(), consigne.moment(), 
-                                      consigne.temperature(), consigne.volume()) 
+                    donnees_client = (client.client_id, consigne.day, consigne.time, 
+                                      consigne.temperature, consigne.drawn_volume) 
                     try:
                         cursor.execute("""
                         INSERT OR IGNORE INTO consignes 
@@ -92,9 +90,9 @@ class ClientManager :
             # Table 'constraints'
             self.db.create_table_constraints()
             contraint_id = None # Initialisation importante
-            if client.contraintes:
+            if client.constraints:
                 # 1. On récupère la matrice numpy (le tableau de chiffres)
-                matrice_numpy = client.contraintes.planning_consommation.data
+                matrice_numpy = client.constraints.consumption_profile.data
                 
                 # 2. On la transforme en texte JSON pour la BDD
                 # .tolist() transforme le numpy array en liste Python standard
@@ -102,7 +100,7 @@ class ClientManager :
 
                 # 3. On prépare les données (Notez qu'on utilise profil_json au lieu de puissance)
                 donnees_constraints = (client.client_id, 
-                                     client.contraintes.temperature_minimale, 
+                                     client.constraints.minimum_temperature, 
                                      profil_json)
                 try:
                     # ATTENTION: J'ai changé le nom de la colonne dans la requête SQL ci-dessous
@@ -133,9 +131,9 @@ class ClientManager :
 
             # Table 'plages_interdites'
                     self.db.create_table_plages_interdites()
-                    list_plages_interdites = client.contraintes.plages_interdites()
+                    list_plages_interdites = client.constraints.forbidden_slots
                     for plage_interdite in list_plages_interdites:
-                        donnees_client = (contraint_id, plage_interdite.debut, plage_interdite.fin)
+                        donnees_client = (contraint_id, plage_interdite.start, plage_interdite.end)
                         try:
                             cursor.execute("""
                             INSERT OR IGNORE INTO plages_interdites
@@ -162,10 +160,10 @@ class ClientManager :
                 
             # Table 'prices'
             self.db.create_table_prices()
-            if client.prix:
-                if client.prix.mode() == 'BASE':
-                    donnees_client = [(client.client_id, 'base', client.prix.base()),
-                                        (client.client_id, 'revente', client.prix.revente())]
+            if client.prices:
+                if client.prices.mode == 'BASE':
+                    donnees_client = [(client.client_id, 'base', client.prices.base),
+                                        (client.client_id, 'revente', client.prices.resale_price)]
                     try:
                         cursor.executemany("""
                             INSERT OR IGNORE INTO prices 
@@ -181,10 +179,10 @@ class ClientManager :
                             f"Interruption complète de l'insertion.\n"
                             f"Erreur SQLite: {e}"
                         ) from e
-                elif client.prix.mode() == 'HPHC':
-                    donnees_client = [(client.client_id, 'hp', client.prix.hp()),
-                                        (client.client_id, 'hc', client.prix.hc()),
-                                        (client.client_id, 'revente', client.prix.revente())]
+                elif client.prices.mode == 'HPHC':
+                    donnees_client = [(client.client_id, 'hp', client.prices.hp),
+                                        (client.client_id, 'hc', client.prices.hc),
+                                        (client.client_id, 'revente', client.prices.resale_price)]
                     try:
                         cursor.executemany("""
                             INSERT OR IGNORE INTO prices 
@@ -194,9 +192,9 @@ class ClientManager :
 
             # Table 'creneaux_hp'
                         self.db.create_table_creneaux_hp()
-                        list_creneaux_hp = client.prix.creneaux_hp()
+                        list_creneaux_hp = client.prices.hp_slots
                         for creneau_hp in list_creneaux_hp:
-                            donnees_client = (client.client_id, creneau_hp.debut, creneau_hp.fin)
+                            donnees_client = (client.client_id, creneau_hp.start, creneau_hp.end)
                             try:
                                 cursor.executemany("""
                                     INSERT OR IGNORE INTO prices 
@@ -232,11 +230,11 @@ class ClientManager :
                     )
 
             # Table 'water_heaters'
-            if client.chauffe_eau:
+            if client.water_heater:
                 self.db.create_table_water_heaters()
-                donnees_client = (client.client_id, client.chauffe_eau.volume(), 
-                                client.chauffe_eau.power(), client.chauffe_eau.coefficient_isolation(), 
-                                client.chauffe_eau.temperature_eau_froide())
+                donnees_client = (client.client_id, client.water_heater.volume, 
+                                client.water_heater.power, client.water_heater.insulation_coefficient, 
+                                client.water_heater.cold_water_temperature)
                 try:
                     cursor.execute("""
                         INSERT OR IGNORE INTO water_heaters
@@ -432,11 +430,11 @@ class ClientManager :
             # Partie Planning
             planning_reconstruit = Planning()
             if list_donnes_consignes:
-                list_points_consign = []
+                list_setpoints = []
                 for consigne in list_donnes_consignes:
-                    list_points_consign.append(PointConsign(consigne['day'], consigne['moment'],
-                                                            consigne['temperature'], consigne['volume']))
-                planning_reconstruit.consignes(list_points_consign)
+                    list_setpoints.append(Setpoint(consigne['day'], consigne['moment'],
+                                                   consigne['temperature'], consigne['volume']))
+                planning_reconstruit.setpoints = list_setpoints
 
             #NOUVELLE PARTIE CONTRAINTES ###############################################################################
             #---------------------------------------------------------------------------------------------------------######
@@ -460,7 +458,7 @@ class ClientManager :
                         if isinstance(h_fin, str): 
                             h_fin = datetime.strptime(h_fin, '%H:%M:%S').time()
                             
-                        list_creneaux.append(Creneau(h_debut, h_fin))
+                        list_creneaux.append(TimeSlot(h_debut, h_fin))
                 
                 info_constraint = list_donnes_constraints[0]
                 
@@ -471,16 +469,16 @@ class ClientManager :
                     # On transforme le texte JSON de la BDD en objet ProfilConsommation
                     data_list = json.loads(json_text)
                     matrice_numpy = np.array(data_list)
-                    profil_objet = ProfilConsommation(matrice_7x24=matrice_numpy)
+                    profil_objet = ConsumptionProfile(matrix_7x24=matrice_numpy)
                 else:
-                    profil_objet = ProfilConsommation() # Profil par défaut si vide
+                    profil_objet = ConsumptionProfile() # Profil par défaut si vide
                 
                 # 3. Création de l'objet final
                 # L'ordre des arguments respecte maintenant votre constraints.py
                 constraints_reconstruit = Constraints(
-                    planning_cons=profil_objet,
-                    plages_interdites=list_creneaux,
-                    temp_minimale=info_constraint['temperature_minimale']
+                    consumption_profile=profil_objet,
+                    forbidden_slots=list_creneaux,
+                    minimum_temperature=info_constraint['temperature_minimale']
                 )
             else:
                 # Si le client n'a aucune contrainte en BDD
@@ -512,33 +510,33 @@ class ClientManager :
             if list_donnes_prices:
                 for price in list_donnes_prices:
                     if price['type'] == 'base':
-                        prix_reconstruit.base(price['prix'])
+                        prix_reconstruit.base = price['prix']
                     elif price['type'] == 'revente':
-                        prix_reconstruit.revente(price['prix'])
-                prix_reconstruit.mode('HPHC')
+                        prix_reconstruit.resale_price = price['prix']
+                prix_reconstruit.mode = 'HPHC'
                 for price in list_donnes_prices:
                     if price['type'] == 'hp':
-                        prix_reconstruit.hp(price['prix'])
+                        prix_reconstruit.hp = price['prix']
                     elif price['type'] == 'hc':
-                        prix_reconstruit.hc(price['prix'])
+                        prix_reconstruit.hc = price['prix']
                 list_creneaux_hp = []
                 for creneau_hp in list_donnes_creneaux_hp:
-                    list_creneaux_hp.append(Creneau(creneau_hp['heure_debut'], creneau_hp['heure_fin']))
-                prix_reconstruit.creneaux_hp(list_creneaux_hp)
+                    list_creneaux_hp.append(TimeSlot(creneau_hp['heure_debut'], creneau_hp['heure_fin']))
+                prix_reconstruit.hp_slots = list_creneaux_hp
 
             # Partie WaterHeater
             water_heater_reconstruit = WaterHeater(donnes_water_heaters['volume'],
                                                    donnes_water_heaters['power'])
-            water_heater_reconstruit.coefficient_isolation(donnes_water_heaters['coeff_isolation'])
-            water_heater_reconstruit.temperature_eau_froide(donnes_water_heaters['temperature_eau_froide_celsius'])
+            water_heater_reconstruit.insulation_coefficient = donnes_water_heaters['coeff_isolation']
+            water_heater_reconstruit.cold_water_temperature = donnes_water_heaters['temperature_eau_froide_celsius']
 
                 
             client_reconstruit = Client(
                 planning=planning_reconstruit, 
-                contraintes=constraints_reconstruit, 
+                constraints=constraints_reconstruit, 
                 features=features_reconstruit, 
-                prix=prix_reconstruit, 
-                chauffe_eau=water_heater_reconstruit, 
+                prices=prix_reconstruit, 
+                water_heater=water_heater_reconstruit, 
                 client_id=donnes_client['client_id']
             )
             
@@ -570,18 +568,18 @@ class ClientManager :
     def update_client_in_db(self, client : Client, 
                       planning : Planning = None, 
                       features : Features = None, 
-                      contraintes : Constraints = None, 
-                      prix : Prices = None, 
-                      chauffe_eau : WaterHeater = None
+                      constraints : Constraints = None, 
+                      prices : Prices = None, 
+                      water_heater : WaterHeater = None
                       ) :
         """Fonction qui met à jour le client dans la BDD. 
         Args : 
         - client : Objet de type Client (voir models)
         - planning : Objet de type Planning (voir models), optionnel
         - features : Objet de type Features (voir models), optionnel
-        - contraintes : Objet de type Constraints (voir models), optionnel
-        - prix : Objet de type Prices (voir models), optionnel
-        - chauffe_eau : Objet de type WaterHeater (voir models), optionnel 
+        - constraints : Objet de type Constraints (voir models), optionnel
+        - prices : Objet de type Prices (voir models), optionnel
+        - water_heater : Objet de type WaterHeater (voir models), optionnel 
         La fonction met à jour uniquement les éléments qui ne sont pas des None.
         Returns :
         - None : Rien sauf mise à jour dans la BDD. 
@@ -604,11 +602,6 @@ class ClientManager :
         """
         #TODO : Le but est de retourner la liste de tous les clients dans la BDD. 
         pass
-
-
-
-
-
 
 
 
