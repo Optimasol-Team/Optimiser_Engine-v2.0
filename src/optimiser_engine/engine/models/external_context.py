@@ -6,6 +6,7 @@ Author: @anaselb
 
 
 from datetime import datetime, timedelta
+from types import NoneType
 import numpy as np 
 from ...domain import Client 
 from .Exceptions import DimensionNotRespected 
@@ -138,7 +139,16 @@ class ExternalContext :
         elif valeur < 0 :
             raise ValueError(f"Le nombre {valeur} doit être positif") 
         else :
-            self._N = valeur 
+            if valeur != self._N :
+                self._N = valeur  
+                self.prices_purchases = None 
+                self.prices_sell = None 
+                self.solar_production = None 
+                self.house_consumption = None
+                self.water_draws = None 
+                self.future_setpoints = None 
+                self.availability_on = None 
+                self.off_peak_hours = None 
 
     @property 
     def step_minutes(self) :

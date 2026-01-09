@@ -20,14 +20,14 @@ prices:
 
 features:
   gradation: true          # true si le chauffe-eau supporte la modulation de puissance
-  mode: "cost"             # Choix : "cost" (économique) ou "AutoCons" (autoconsommation)
+  mode: "AutoCons"             # Choix : "cost" (économique) ou "AutoCons" (autoconsommation)
 
 constraints:
   min_temp: 40.0           # Température minimale de sécurité
   # Périodes où la chauffe est INTERDITE
   forbidden_slots:
-    - start: "12:00"
-      end: "14:00"
+    - start: "01:00"
+      end: "18:00"
   
   # Profil de consommation (null = profil par défaut / bruit de fond)
   # Pour un profil personnalisé, fournir une liste de 7 listes de 24 valeurs
@@ -39,55 +39,55 @@ planning:
   # day : 0 = Lundi, ... 6 = Dimanche
   - day: 0
     time: "18:15"          # Mettre entre guillemets pour éviter la confusion avec des minutes
-    target_temp: 55.0
-    volume: 10.0
+    target_temp: 90.0
+    volume: 40.0
 
   - day: 1
     time: "18:15"
-    target_temp: 55.0
-    volume: 10.0
+    target_temp: 90.0
+    volume: 80.0
 
   - day: 2
     time: "08:00"
-    target_temp: 55.0
-    volume: 10.0
+    target_temp: 90.0
+    volume: 35.0
 
   - day: 2
     time: "18:30"
-    target_temp: 55.0
-    volume: 10.0
+    target_temp: 90.0
+    volume: 70.0
 
   - day: 3
     time: "18:15"
-    target_temp: 55.0
-    volume: 10.0
+    target_temp: 90.0
+    volume: 45.0
 
   - day: 4
     time: "09:00"
-    target_temp: 55.0
-    volume: 10.0
+    target_temp: 90.0
+    volume: 60.0
 
   - day: 4
     time: "18:15"
-    target_temp: 55.0
-    volume: 10.0
+    target_temp: 90.0
+    volume: 75.0
 
   - day: 5
     time: "10:30"
-    target_temp: 55.0
-    volume: 10.0
+    target_temp: 90.0
+    volume: 50.0
 
   - day: 5
     time: "17:00"
-    target_temp: 55.0
-    volume: 10.0
+    target_temp: 90.0
+    volume: 65.0
 
   - day: 6
     time: "09:00"
-    target_temp: 55.0
-    volume: 10.0
+    target_temp: 90.0
+    volume: 40.0
 
   - day: 6
     time: "18:15"
-    target_temp: 55.0
-    volume: 10.0 
+    target_temp: 90.0
+    volume: 85.0

@@ -190,8 +190,8 @@ class TrajectorySystem :
             (valeur invalide) If decisions fall outside [0, 1] or violate non-gradation mode.
         """
         #Vérification des autorisations : 
-        if self._mode == TrajectorySource.SOLVER_DELIVERED :
-            raise PermissionDeniedError("Vous n'avez pas le droit de modifier une trajectoire livrée par le solveur") 
+        #if self._mode == TrajectorySource.SOLVER_DELIVERED :
+           # raise PermissionDeniedError("Vous n'avez pas le droit de modifier une trajectoire livrée par le solveur") 
         if valeur is None :
             self._X = None 
             self._cost = None 
@@ -576,8 +576,8 @@ class TrajectorySystem :
         DimensionNotRespected
             (dimension incorrecte) If vector dimensions do not match the horizon length.
         """
-        if self._mode == TrajectorySource.SOLVER_DELIVERED :
-            return self._cost 
+        #if self._mode == TrajectorySource.SOLVER_DELIVERED :
+            #return self._cost 
         if self._cost is not None :
             return self._cost 
         

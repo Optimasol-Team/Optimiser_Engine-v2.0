@@ -157,7 +157,7 @@ class Client :
 
             # 3. Instanciation des Features
             f_data = data.get("features", {})
-            mode_str = f_data.get("mode", "COST")
+            mode_str = f_data.get("mode", "cost")
             # Conversion string -> Enum
             mode_enum = OptimizationMode(mode_str) 
             
@@ -177,11 +177,16 @@ class Client :
                 ))
 
             profil_data = c_data.get("consumption_profile")
+            background_noise = c_data.get("background_noise") 
             if profil_data:
                 matrice = np.array(profil_data)
                 consumption_profile = ConsumptionProfile(matrix_7x24=matrice)
-            else:
+            elif background_noise :
+                consumption_profile = ConsumptionProfile(background_noise=background_noise) 
+            else :    
                 consumption_profile = ConsumptionProfile()
+            
+            
 
             constraints = Constraints(
                 consumption_profile=consumption_profile,

@@ -7,7 +7,8 @@ This package groups the business entities required to describe a client scenario
 from .client import Client 
 from .constraints import Constraints, ConsumptionProfile 
 from .consignes_models import Planning, Setpoint
-from .features_models import Features 
+from .features_models import Features, OptimizationMode
 from .prices_model import Prices
 from .water_heater_model import WaterHeater
 from .common import TimeSlot 
+

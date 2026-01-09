@@ -31,7 +31,7 @@ class Prices:
     hp_slots : list
         (créneaux HP) List of TimeSlot instances defining peak hours in HPHC mode.
     """
-    def __init__(self):
+    def __init__(self, mode = None):
         """
         Initialize pricing with sensible defaults for both tariff modes.
 
@@ -45,7 +45,10 @@ class Prices:
         self._hc = 0.18 
         self._base = 0.20
         self._resale_price = 0.10 
-        self._mode = "BASE" # On initialise un mode par défaut pour éviter les bugs
+        if mode is None :
+            self.mode = "BASE"
+        else :
+            self.mode = mode
         self._hp_slots = [] 
 
     # Méthode pour vérifier si on est bien dans le mode attendu. 

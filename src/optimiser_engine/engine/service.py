@@ -10,7 +10,7 @@ from .models.system_config import SystemConfig
 from .models.external_context import ExternalContext
 from .models.optimisation_inputs import OptimizationInputs
 from .models.trajectory import TrajectorySystem, StandardWHType, RouterMode
-from solver import Solver 
+from .solver import Solver 
 import numpy as np 
 from .models.Exceptions import WeatherNotValid , SolverFailed
 
@@ -404,8 +404,10 @@ class OptimizerService :
         # 5. Sécurité : Remplissage des bords (bfill/ffill)
         # Utile si le DF commence pile une minute après instant_initial par exemple
         df_final = df_final.bfill().ffill()
+        # Crée un nouveau DataFrame sans la dernière ligne
+        df_without_last_lign = df_final.iloc[:-1].copy()
 
-        return df_final
+        return df_without_last_lign
     
     def _is_temperature_realistic(self, temperature) :
         """
@@ -474,6 +476,8 @@ class OptimizerService :
 
         # 4. Formatage en vecteur ligne (1, N)
         # flat_data est de forme (N,). reshape(1, -1) le transforme en (1, N).
-        row_vector = flat_data.reshape(1, -1)
+        return flat_data
+    
+        #row_vector = flat_data.reshape(1, -1)
 
-        return row_vector
+        #return row_vector

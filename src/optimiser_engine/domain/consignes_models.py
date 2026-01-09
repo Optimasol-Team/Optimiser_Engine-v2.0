@@ -235,16 +235,16 @@ class Planning:
     setpoints : list
         (liste de consignes) Sorted list of Setpoint instances representing the schedule.
     """
-    def __init__(self):
+    def __init__(self, setpoints_list : List[Setpoint] = []):
         """
-        Initialize an empty planning container.
+        Initialize a planning by a list of Setpoints.
 
         Returns
         -------
         None
             (aucun retour) Creates an empty setpoint list.
         """
-        self._setpoints: List[Setpoint] = []
+        self.setpoints = setpoints_list
 
     def _clean_and_sort(self, raw_list: List[Setpoint]) -> List[Setpoint]:
         """

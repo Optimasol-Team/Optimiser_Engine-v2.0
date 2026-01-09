@@ -15,7 +15,7 @@ from ...domain import Client, Features, Planning, Constraints, Prices, WaterHeat
 
 chemin_base = Path(__file__).parent.parent
 sys.path.append(str(chemin_base / 'client_models'))
-from base_db import Database
+from .base_db import Database
 import sqlite3
 import os
 from datetime import datetime
@@ -602,7 +602,6 @@ class ClientManager :
         """
         #TODO : Le but est de retourner la liste de tous les clients dans la BDD. 
         pass
-
 
 
 

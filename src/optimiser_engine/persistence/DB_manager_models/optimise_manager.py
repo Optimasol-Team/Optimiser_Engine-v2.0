@@ -1,7 +1,7 @@
 """Le but de ce fichier est de contenir la classe OptimiseManager qui gère l'optimisation pour un client donné.
 Auteur : @anaselb""" 
 
-from ..models import Client, Features, Planning, Constraints, Prices, WaterHeater
+from ...domain import Client, Features, Planning, Constraints, Prices, WaterHeater
 from pathlib import Path
 import pandas as pd 
 from datetime import time 

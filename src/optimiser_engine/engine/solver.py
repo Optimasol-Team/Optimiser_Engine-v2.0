@@ -115,7 +115,8 @@ class Solver:
         
         # Injection du coût calculé par le solveur (plus précis)
         if mode == OptimizationMode.COST:
-            traj.upload_cost(res.fun) 
+            cost = res.fun / (1000*(60/(inputs.context.step_minutes)))
+            traj.upload_cost(cost) 
         # Si mode AUTOCONS, tu pourrais vouloir uploader le score d'autoconsommation si prévu
         
         # ÉTAPE CLÉ 2 : On passe en mode "Livré" (Verrouillage final)
