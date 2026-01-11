@@ -2,7 +2,7 @@
 
 Author: @anaselb
 """
-from ...exceptions import OptimizerError
+from ....optimiser_engine import OptimizerError
 
 class DimensionNotRespected(OptimizerError) :
     """
