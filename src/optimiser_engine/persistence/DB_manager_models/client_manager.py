@@ -263,7 +263,6 @@ class ClientManager :
             cursor.close()
             self.db.close_db()
         
-
     def reconstitute_client(self, client_id : int = 0) -> Client :
         """Fonction pour reconstituer un client à partir de son ID. 
         Args : 
@@ -563,7 +562,6 @@ class ClientManager :
         - DataBaseError : Si l'accès à la BDD est impossible 
         - ClientNotFound : Si le client n'existe pas dans la base de données. """ 
         #TODO : Cette fonction supprime le client de la BDD. 
-
 
     def update_client_in_db(self, client : Client, 
                       planning : Planning = None, 
