@@ -1,7 +1,7 @@
 import sqlite3
 import os
 from datetime import datetime
-from ...exceptions import *
+from .exceptions import *
 
 class Database:
     def __init__(self, chemin_db=None):
@@ -195,35 +195,23 @@ class Database:
         """
         self.connexion.execute(sql)
         print("Table 'prices' créé")
-    
-    def create_all_tables(self):
-        """Créer le schéma de la base de données"""
-        
-        # 1. Table clients
-        self.create_table_clients()
-        
-        # 2. Table constraints
-        self.create_table_constraints()
-        
-        # 3. Table water_heaters
-        self.create_table_water_heaters()
-        
-        # 4. Table consignes
-        self.create_table_consignes()
-        
-        # 5. Table creneaux_hp
-        self.create_table_creneaux_hp()
-        
-        # 6. Table prices
-        self.create_table_prices()
-        
-        # 7. Table plages_interdites
-        self.create_table_plages_interdites()
-        
-        # 8. Créer les index
-        self.create_index()
-        
-        print("\nToutes les tables ont été créés avec succès!")
+
+    def create_table_decisions(self):
+        """Créer la table pour stocker les décisions"""
+        sql = """
+        CREATE TABLE IF NOT EXISTS decisions (
+            decision_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER,
+            date TEXT NOT NULL,
+            puissance REAL NOT NULL,
+            
+            FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
+            UNIQUE (client_id, date),
+            CHECK (puissance >= 0)
+        );
+        """
+        self.connexion.execute(sql)
+        print("Table 'decisions' créé")
     
     def create_index(self):
         """Créer des index pour améliorer les performances"""
@@ -240,13 +228,17 @@ class Database:
             ("CREATE INDEX IF NOT EXISTS idx_consignes_day ON consignes(day)"),
             
             # Table plages_interdites
-            ("CREATE INDEX IF NOT EXISTS idx_plages_constraint ON plages_interdites(constraint_id)"),
+            ("CREATE INDEX IF NOT EXISTS idx_plages_client ON plages_interdites(client_id)"),
 
             # Table prices
             ("CREATE INDEX IF NOT EXISTS idx_prices_client ON prices(client_id)"),
 
             # Table creneaux_hp
-            ("CREATE INDEX IF NOT EXISTS idx_creneaux_hp_client ON creneaux_hp(client_id)")
+            ("CREATE INDEX IF NOT EXISTS idx_creneaux_hp_client ON creneaux_hp(client_id)"),
+
+            # Table decisions
+            ("CREATE INDEX IF NOT EXISTS idx_decisions_client ON decisions(client_id)"),
+            ("CREATE INDEX IF NOT EXISTS idx_decisions_date ON decisions(date)")
         ]
         
         for sql in index_liste:
@@ -284,3 +276,35 @@ class Database:
             print(f"  {table[0]:20}: {compte:4} enregistrements")
         
         print("=" * 60)
+
+    def create_all_tables(self):
+        """Créer le schéma de la base de données"""
+        
+        # 1. Table clients
+        self.create_table_clients()
+        
+        # 2. Table constraints
+        self.create_table_constraints()
+        
+        # 3. Table water_heaters
+        self.create_table_water_heaters()
+        
+        # 4. Table consignes
+        self.create_table_consignes()
+        
+        # 5. Table creneaux_hp
+        self.create_table_creneaux_hp()
+        
+        # 6. Table prices
+        self.create_table_prices()
+        
+        # 7. Table plages_interdites
+        self.create_table_plages_interdites()
+
+        # 8. Table de decisions
+        self.create_table_decisions()
+        
+        # 9. Créer les index
+        self.create_index()
+        
+        print("\nToutes les tables ont été créés avec succès!")

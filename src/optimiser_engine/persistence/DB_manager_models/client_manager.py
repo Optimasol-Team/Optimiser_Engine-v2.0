@@ -1,5 +1,5 @@
 """Le but de fichier est de regrouper la classe ClientManager qui est une partie de l'API. 
-Auteur : @anaselb 
+Auteur : @laura-campelo
 
 """
 
@@ -20,7 +20,7 @@ import sqlite3
 import os
 from datetime import datetime
 import copy
-from ...exceptions import *
+from .exceptions_db import *
 
 
 class ClientManager :
@@ -56,7 +56,7 @@ class ClientManager :
         donnees_client = (client.client_id, client.features.gradation(), client.features.mode()) 
         try:
             curseur.execute("""
-                INSERT OR IGNORE INTO clients 
+                INSERT INTO clients 
                 (client_id, gradation, mode) 
                 VALUES (?, ?, ?)
             """, donnees_client)
@@ -78,7 +78,7 @@ class ClientManager :
                                     consigne.temperature, consigne.drawn_volume) 
                 try:
                     curseur.execute("""
-                    INSERT OR IGNORE INTO consignes 
+                    INSERT INTO consignes 
                     (client_id, day, moment, temperature, volume) 
                     VALUES (?, ?, ?, ?, ?)
                 """, donnees_client)
@@ -109,7 +109,7 @@ class ClientManager :
             try:
                 # ATTENTION: J'ai changé le nom de la colonne dans la requête SQL ci-dessous
                 curseur.execute("""
-                INSERT OR IGNORE INTO constraints 
+                INSERT INTO constraints 
                 (client_id, temperature_minimale, profil_conso_json) 
                 VALUES (?, ?, ?)
             """, donnees_constraints)
@@ -131,7 +131,7 @@ class ClientManager :
                 donnees_client = (client.client_id, plage_interdite.start, plage_interdite.end)
                 try:
                     curseur.execute("""
-                    INSERT OR IGNORE INTO plages_interdites
+                    INSERT INTO plages_interdites
                     (client_id, heure_debut, heure_fin)
                     VALUES (?, ?, ?)
                 """, donnees_client)
@@ -152,7 +152,7 @@ class ClientManager :
                                     (client.client_id, 'revente', client.prices.resale_price)]
                 try:
                     curseur.executemany("""
-                        INSERT OR IGNORE INTO prices 
+                        INSERT INTO prices 
                         (client_id, type, prix) 
                         VALUES (?, ?, ?)
                     """, donnees_client)
@@ -170,7 +170,7 @@ class ClientManager :
                                     (client.client_id, 'revente', client.prices.resale_price)]
                 try:
                     curseur.executemany("""
-                        INSERT OR IGNORE INTO prices 
+                        INSERT INTO prices 
                         (client_id, type, prix) 
                         VALUES (?, ?, ?)
                     """, donnees_client)
@@ -182,7 +182,7 @@ class ClientManager :
                         donnees_client = (client.client_id, creneau_hp.start, creneau_hp.end)
                         try:
                             curseur.executemany("""
-                                INSERT OR IGNORE INTO creneaux_hp  
+                                INSERT INTO creneaux_hp  
                                 (client_id, heure_debut, heure_fin) 
                                 VALUES (?, ?, ?)
                             """, donnees_client)
@@ -220,7 +220,7 @@ class ClientManager :
                             client.water_heater.cold_water_temperature)
             try:
                 curseur.execute("""
-                    INSERT OR IGNORE INTO water_heaters
+                    INSERT INTO water_heaters
                     (client_id, volume, power, coeff_isolation, temperature_eau_froide_celsius) 
                     VALUES (?, ?, ?, ?, ?)
                 """, donnees_client)
@@ -530,7 +530,7 @@ class ClientManager :
         # Créer un curseur pour exécuter le requête
         curseur = self.db.connexion.cursor()
 
-        curseur.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+        curseur.execute("DELETE FROM clients WHERE client_id = ?", (client_id,))
         
         # Récupérer tous les résultats
         lignes_concernees = curseur.rowcount()
@@ -816,16 +816,3 @@ class ClientManager :
         liste_clients = [row["client_id"] for row in rows]
 
         return liste_clients
-
-
-
-
-
-
-
-
-
-
-
-
-
