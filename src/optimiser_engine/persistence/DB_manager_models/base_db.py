@@ -1,7 +1,7 @@
 import sqlite3
 import os
 from datetime import datetime
-from .exceptions import *
+from .exceptions_db import *
 
 class Database:
     def __init__(self, chemin_db=None):
