@@ -2,14 +2,21 @@ import sqlite3
 import os
 from datetime import datetime
 
+class PathEmptyError(Exception):
+    def __init__(self):
+        super().__init__(f"Un chemin vide n'est pas acceptable.")
+
 class Database:
     def __init__(self, chemin_db=None):
         """
         Initialise la classe Database
         
-        Args:
+        Args :
             chemin_db (str): Chemin complet du fichier de base de données SQLite
                             Si None, utilise le chemin par défaut dans le répertoire courant
+
+        Raises :
+        - sqlite3.OperationalError
         """
         if chemin_db is None:
             # Chemin par défaut dans le répertoire courant
@@ -48,11 +55,11 @@ class Database:
         """Établir une connexion à la base de données SQLite"""
         try:
             self.connexion = sqlite3.connect(self.chemin_db)
-            self.connexion.execute("PRAGMA foreign_keys = ON")  # Activer les clés étrangères
-            print(f"Connecté à la base de données: {self.chemin_db}")
-            return True
-        except sqlite3.Error as e:
+        except sqlite3.OperationalError:
             raise
+        self.connexion.execute("PRAGMA foreign_keys = ON")  # Activer les clés étrangères
+        print(f"Connecté à la base de données: {self.chemin_db}")
+        return True
         
     def close_db(self):
         """Fermer la connexion à la base de données"""
@@ -60,7 +67,7 @@ class Database:
             self.connexion.close()
             print("Connexion fermée")
     
-    def create_all_tables(self, data_initial_wanted=True):
+    def create_all_tables(self, data_initial_wanted=False):
         """Créer le schéma de la base de données"""
         
         # 1. Table clients
@@ -272,18 +279,22 @@ class Database:
         
         try:
             self.connexion.execute("""
-                INSERT OR IGNORE INTO clients 
-                (client_id, gradation, mode) 
+                INSERT INTO clients (client_id, gradation, mode)
                 VALUES (?, ?, ?)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    gradation = excluded.gradation,
+                    mode = excluded.mode
             """, donnees_admin)
         except sqlite3.IntegrityError:
+            print("Essaye d'inserer le 'Client Admin' a generé un erreur d'integrité!")
             # ID 1 existe déjà, utiliser AUTOINCREMENT
-            donnees_admin = donnees_admin[1:]  # Retirer le client_id
-            self.connexion.execute("""
-                INSERT OR IGNORE INTO clients 
-                (client_id, gradation, mode) 
-                VALUES (?, ?, ?)
-            """, donnees_admin)
+            # donnees_admin = donnees_admin[1:]  # Retirer le client_id
+            # self.connexion.execute("""
+            #     INSERT OR IGNORE INTO clients 
+            #     (client_id, gradation, mode) 
+            #     VALUES (?, ?, ?)
+            # """, donnees_admin)
+
         
         # 2. Insérer les prix par défaut
         prix_base = [
@@ -337,6 +348,7 @@ class Database:
         for sql in index_liste:
             self.connexion.execute(sql)
         
+        self.connexion.commit()
         print("Index créés")
     
     def verifier_structure(self):
@@ -427,20 +439,31 @@ class Database:
 
 # ====== FONCTIONS UTILITAIRES ======
 
-def demander_chemin_db(prompt="Chemin complet de la base de données: "):
+def demander_chemin_db(type="reel", prompt="Chemin complet de la base de données: "):
     """Demander un chemin de base de données avec validation"""
+    if type not in ["reel", "exemple", "test", "exporter"]:
+        raise TypeError("Attention: Le 'type' de la base de données doit être 'reel', 'exemple' ou 'test'.")
+
     while True:
         chemin = input(prompt).strip()
         
-        if not chemin:
-            # Utiliser le chemin par défaut
+        if not chemin and type == "reel":
+            # Utiliser le chemin réel par défaut
             chemin = os.path.join(os.getcwd(), 'db_engine_sqlite.db')
             print(f"Utilisation du chemin par défaut: {chemin}")
             return chemin
+        elif not chemin and type == "exemple":
+            # Utiliser le chemin exemple par défaut
+            chemin = os.path.join(os.getcwd(), 'exemple.db')
+            print(f"Utilisation du chemin par défaut: {chemin}")
+            return chemin
+        elif not chemin and type in ["test", "exporter"]:
+            raise PathEmptyError()
         
         # Vérifier si le chemin a l'extension .db
         if not chemin.lower().endswith(('.db', '.sqlite', '.sqlite3')):
             print("Attention: Le fichier devrait avoir l'extension .db, .sqlite ou .sqlite3")
+            continue
         
         # Convertir en chemin absolu
         chemin = os.path.abspath(chemin)
@@ -478,7 +501,7 @@ def lister_bases_donnees(dossier=None):
     
     return bases
 
-def create_base_complete(chemin_db=None):
+def create_base_complete(chemin_db=None, data_initial_wanted=False):
     """
     Fonction principale pour créer la base complète
     
@@ -491,7 +514,7 @@ def create_base_complete(chemin_db=None):
     
     if chemin_db is None:
         chemin_db = demander_chemin_db()
-    
+
     info = {
         'chemin': chemin_db,
         'existe': os.path.exists(chemin_db),
@@ -524,7 +547,7 @@ def create_base_complete(chemin_db=None):
             return None
         
         # Créer toutes les tables
-        base_donnees.create_all_tables()
+        base_donnees.create_all_tables(data_initial_wanted=data_initial_wanted)
         
         # Vérifier la structure
         base_donnees.verifier_structure()
@@ -588,12 +611,13 @@ def exemple_utilisation_avancee():
     print("=" * 50)
     
     # Demander le chemin pour l'exemple
-    chemin_db = input("Chemin pour l'exemple [exemple_test.db]: ").strip()
-    if not chemin_db:
-        chemin_db = os.path.join(os.getcwd(), 'exemple_test.db')
+    try:
+        chemin_db = demander_chemin_db(type="exemple", prompt="Chemin complet de la base pour l'exemple: ")
+    except TypeError:
+        raise
     
     # Créer la base
-    base_donnees = create_base_complete(chemin_db)
+    base_donnees = create_base_complete(chemin_db, data_initial_wanted=True)
     
     if base_donnees:
         # Se reconnecter pour utiliser
@@ -613,9 +637,9 @@ def exemple_utilisation_avancee():
         
         # 2. Insérer les contraintes du client
         curseur.execute("""
-            INSERT INTO constraints (client_id, temperature_minimale, puissance_maison)
+            INSERT INTO constraints (client_id, temperature_minimale, profil_conso_json)
             VALUES (?, ?, ?)
-        """, (id_client, 15.0, 2.5))
+        """, (id_client, 15.0, "test"))
         
         id_constraint = curseur.lastrowid
         
@@ -655,7 +679,7 @@ def exemple_utilisation_avancee():
         print("Données du client inséré:")
         curseur.execute("""
             SELECT c.client_id, c.gradation, c.mode, 
-                   ct.temperature_minimale, ct.puissance_maison,
+                   ct.temperature_minimale, ct.profil_conso_json,
                    wh.volume, wh.power,
                    COUNT(DISTINCT cs.consigne_id) as total_consignes,
                    COUNT(DISTINCT pi.plage_interdite_id) as total_plages_interdites
@@ -674,7 +698,7 @@ def exemple_utilisation_avancee():
    Gradation: {donnees[1]}
    Mode: {donnees[2]}
    Temp. Minimale: {donnees[3]}°C
-   Puissance Maison: {donnees[4]} kW
+   Profil de consommation: {donnees[4]}
    Volume Chauffe-eau: {donnees[5]} L
    Puissance Chauffe-eau: {donnees[6]} W
    Total Consignes: {donnees[7]}
@@ -705,30 +729,48 @@ def menu_principal():
         option = input("Choisissez une option (1-5): ").strip()
         
         if option == '1':
-            base_donnees = create_base_complete()
+            base_donnees = create_base_complete(data_initial_wanted=True)
             
         elif option == '2':
-            if base_donnees is None:
-                chemin_db = demander_chemin_db("Chemin de la base à tester: ")
-                if os.path.exists(chemin_db):
-                    base_donnees = Database(chemin_db)
-                else:
-                    print(f"Base non trouvée: {chemin_db}")
-                    continue
+            try:
+                chemin_db = demander_chemin_db(type="test", prompt="Chemin complet de la base à tester: ")
+            except TypeError as e:
+                print(e)
+                continue
+            except PathEmptyError as e:
+                print(f"Problème dans le test: " + str(e))
+                continue
+            base_donnees = Database(chemin_db)
+            # if os.path.exists(chemin_db):
+            #     base_donnees = Database(chemin_db)
+            # else:
+            #     print(f"Base non trouvée: {chemin_db}")
+            #     continue
             
             tester_requetes(base_donnees)
             
         elif option == '3':
-            exemple_utilisation_avancee()
-            
+            try:
+                exemple_utilisation_avancee()
+            except TypeError as e:
+                print(e)
+                continue
+                    
         elif option == '4':
-            if base_donnees is None:
-                chemin_db = demander_chemin_db("Chemin de la base à exporter: ")
-                if os.path.exists(chemin_db):
-                    base_donnees = Database(chemin_db)
-                else:
-                    print(f"Base non trouvée: {chemin_db}")
-                    continue
+            try:
+                chemin_db = demander_chemin_db(type="exporter", prompt="Chemin de la base à exporter: ")
+            except TypeError as e:
+                print(e)
+                continue
+            except PathEmptyError as e:
+                print(f"Problème dans l'exportation: " + str(e))
+                continue
+            base_donnees = Database(chemin_db)
+            # if os.path.exists(chemin_db):
+            #     base_donnees = Database(chemin_db)
+            # else:
+            #     print(f"Base non trouvée: {chemin_db}")
+            #     continue
             
             base_donnees.connect_db()
             fichier = base_donnees.exporter_vers_sql()
@@ -747,9 +789,3 @@ def menu_principal():
 if __name__ == "__main__":
     # Exécuter le menu interactif
     menu_principal()
-    
-    # Ou exécuter directement avec un chemin spécifique:
-    # chemin_db = "/chemin/complet/vers/ma_base.db"
-    # base_donnees = create_base_complete(chemin_db)
-    # if base_donnees:
-    #     tester_requetes(base_donnees)
