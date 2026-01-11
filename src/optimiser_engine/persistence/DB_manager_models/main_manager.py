@@ -10,4 +10,6 @@ class DBManager(DecisionsManager, ClientManager) :
     def __init__(self, path_db) :
         self.path_db = path_db 
         DecisionsManager.__init__(self, path_db)
-        ClientManager.__init__(self, path_db) 
+        ClientManager.__init__(self, path_db)
+
+    # TODO: Finir l'implementation
