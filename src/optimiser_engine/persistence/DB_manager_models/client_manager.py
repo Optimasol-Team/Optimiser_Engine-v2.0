@@ -1,5 +1,5 @@
 """Le but de fichier est de regrouper la classe ClientManager qui est une partie de l'API. 
-Auteur : @anaselb 
+Auteur : @laura-campelo
 
 """
 
@@ -20,6 +20,7 @@ import sqlite3
 import os
 from datetime import datetime
 import copy
+from .exceptions_db import *
 
 
 class ClientManager :
@@ -34,236 +35,208 @@ class ClientManager :
         Returns : 
         - None (Rien car seulement écriture dans la BDD). 
         Raises : 
-        - ConnectionError si accès impossible à la DB. 
-        - ValueError : Si entrées non respectés. 
+        - DatabaseConnexionError : si accès impossible à la DB. 
+        - ValueError : si entrées non respectés. 
         """
 
         # Connection avec le BDD
         try:
             self.db.connect_db()
-            print(f"Connecté à la base de données: {self.path_db}")
-            cursor = self.db.connexion.cursor()
+        except DatabaseConnexionError:
+            raise DatabaseConnexionError(
+                f"Impossible de se connecter à la base de données.\n"
+                f"Chemin: {self.path_db}\n"
+            )
+            
+        print(f"Connecté à la base de données: {self.path_db}")
+        curseur = self.db.connexion.cursor()
 
-            # Table 'clients'
-            self.db.create_table_clients()
-            donnees_client = (client.client_id, client.features.gradation(), client.features.mode()) 
-            try:
-                cursor.execute("""
-                    INSERT OR IGNORE INTO clients 
-                    (client_id, gradation, mode) 
-                    VALUES (?, ?, ?)
-                """, donnees_client)
-            except sqlite3.IntegrityError as e:
-                self.db.connexion.rollback() # Efacez TOUT depuis le début.
-                cursor.close()
-                self.db.close_db()
-                raise ValueError(
-                    f"ID du client déjà existe.\n"
-                    f"Interruption complète de l'insertion.\n"
-                    f"Erreur SQLite: {e}"
-                ) from e
+        # Table 'clients'
+        self.db.create_table_clients()
+        donnees_client = (client.client_id, client.features.gradation(), client.features.mode()) 
+        try:
+            curseur.execute("""
+                INSERT INTO clients 
+                (client_id, gradation, mode) 
+                VALUES (?, ?, ?)
+            """, donnees_client)
+        except DatabaseIntegrityError:
+            self.db.connexion.rollback() # Efacez TOUT depuis le début.
+            curseur.close()
+            self.db.close_db()
+            raise ValueError(
+                f"ID du client déjà existe.\n"
+                f"Interruption complète de l'insertion.\n"
+            )
 
-            # Table 'consignes'
-            self.db.create_table_consignes()
-            if client.planning:
-                list_consignes = client.planning.setpoints
-                for consigne in list_consignes:
-                    donnees_client = (client.client_id, consigne.day, consigne.time, 
-                                      consigne.temperature, consigne.drawn_volume) 
-                    try:
-                        cursor.execute("""
-                        INSERT OR IGNORE INTO consignes 
-                        (client_id, day, moment, temperature, volume) 
-                        VALUES (?, ?, ?, ?, ?)
-                    """, donnees_client)
-                    except sqlite3.IntegrityError as e:
-                        self.db.connexion.rollback() # Efacez TOUT depuis le début.
-                        cursor.close()
-                        self.db.close_db()
-                        raise ValueError(
-                            f"Valeur invalide envoyée dans le planning.\n"
-                            f"Interruption complète de l'insertion.\n"
-                            f"Erreur SQLite: {e}"
-                        ) from e
-
-            ################# BLOC DE CONSTRAINTS AJOUTÉ ######################## : 
-            # Table 'constraints'
-            self.db.create_table_constraints()
-            contraint_id = None # Initialisation importante
-            if client.constraints:
-                # 1. On récupère la matrice numpy (le tableau de chiffres)
-                matrice_numpy = client.constraints.consumption_profile.data
-                
-                # 2. On la transforme en texte JSON pour la BDD
-                # .tolist() transforme le numpy array en liste Python standard
-                profil_json = json.dumps(matrice_numpy.tolist())
-
-                # 3. On prépare les données (Notez qu'on utilise profil_json au lieu de puissance)
-                donnees_constraints = (client.client_id, 
-                                     client.constraints.minimum_temperature, 
-                                     profil_json)
+        # Table 'consignes'
+        self.db.create_table_consignes()
+        if client.planning:
+            list_consignes = client.planning.setpoints
+            for consigne in list_consignes:
+                donnees_client = (client.client_id, consigne.day, consigne.time, 
+                                    consigne.temperature, consigne.drawn_volume) 
                 try:
-                    # ATTENTION: J'ai changé le nom de la colonne dans la requête SQL ci-dessous
-                    cursor.execute("""
-                    INSERT OR IGNORE INTO constraints 
-                    (client_id, temperature_minimale, profil_conso_json) 
-                    VALUES (?, ?, ?)
-                """, donnees_constraints)
-                    
-                    contraint_id = cursor.lastrowid
-                
-
-
-            #Ancienne table supprimée : ##################################################################
-            # Table 'constraints'
-            #
-            # if client.contraintes:
-                #donnees_client = (client.client_id, client.contraintes.temperature_minimale(), 
-                                  #client.contraintes.puissance_maison())
-                #try:
-                   # cursor.execute("""
-                    #INSERT OR IGNORE INTO constraints 
-                    #(client_id, temperature_minimale, puissance_maison) 
-                    #VALUES (?, ?, ?)
-                #""", donnees_client)
-                   # contraint_id = cursor.lastrowid() 
-#############################################################################################################
-
-            # Table 'plages_interdites'
-                    self.db.create_table_plages_interdites()
-                    list_plages_interdites = client.constraints.forbidden_slots
-                    for plage_interdite in list_plages_interdites:
-                        donnees_client = (contraint_id, plage_interdite.start, plage_interdite.end)
-                        try:
-                            cursor.execute("""
-                            INSERT OR IGNORE INTO plages_interdites
-                            (client_id, day, moment, temperature, volume) 
-                            VALUES (?, ?, ?, ?, ?)
-                        """, donnees_client)
-                        except sqlite3.IntegrityError as e:
-                            self.db.connexion.rollback() # Efacez TOUT depuis le début.
-                            self.db.close_db()
-                            raise ValueError(
-                                f"Valeur invalide envoyée dans les plages interdites.\n"
-                                f"Interruption complète de l'insertion.\n"
-                                f"Erreur SQLite: {e}"
-                            ) from e
-                except sqlite3.IntegrityError as e:
+                    curseur.execute("""
+                    INSERT INTO consignes 
+                    (client_id, day, moment, temperature, volume) 
+                    VALUES (?, ?, ?, ?, ?)
+                """, donnees_client)
+                except DatabaseIntegrityError:
                     self.db.connexion.rollback() # Efacez TOUT depuis le début.
-                    cursor.close()
+                    curseur.close()
                     self.db.close_db()
                     raise ValueError(
-                        f"Valeur invalide envoyée dans les contraintes.\n"
-                        f"Interruption complète de l'insertion.\n"
-                        f"Erreur SQLite: {e}"
-                    ) from e
-                
-            # Table 'prices'
-            self.db.create_table_prices()
-            if client.prices:
-                if client.prices.mode == 'BASE':
-                    donnees_client = [(client.client_id, 'base', client.prices.base),
-                                        (client.client_id, 'revente', client.prices.resale_price)]
-                    try:
-                        cursor.executemany("""
-                            INSERT OR IGNORE INTO prices 
-                            (client_id, type, prix) 
-                            VALUES (?, ?, ?)
-                        """, donnees_client)
-                    except sqlite3.IntegrityError as e:
-                        self.db.connexion.rollback() # Efacez TOUT depuis le début.
-                        cursor.close()
-                        self.db.close_db()
-                        raise ValueError(
-                            f"Valeur invalide envoyée dans les prix.\n"
-                            f"Interruption complète de l'insertion.\n"
-                            f"Erreur SQLite: {e}"
-                        ) from e
-                elif client.prices.mode == 'HPHC':
-                    donnees_client = [(client.client_id, 'hp', client.prices.hp),
-                                        (client.client_id, 'hc', client.prices.hc),
-                                        (client.client_id, 'revente', client.prices.resale_price)]
-                    try:
-                        cursor.executemany("""
-                            INSERT OR IGNORE INTO prices 
-                            (client_id, type, prix) 
-                            VALUES (?, ?, ?)
-                        """, donnees_client)
-
-            # Table 'creneaux_hp'
-                        self.db.create_table_creneaux_hp()
-                        list_creneaux_hp = client.prices.hp_slots
-                        for creneau_hp in list_creneaux_hp:
-                            donnees_client = (client.client_id, creneau_hp.start, creneau_hp.end)
-                            try:
-                                cursor.executemany("""
-                                    INSERT OR IGNORE INTO prices 
-                                    (client_id, heure_debut, heure_fin) 
-                                    VALUES (?, ?, ?)
-                                """, donnees_client)
-                            except sqlite3.IntegrityError as e:
-                                self.db.connexion.rollback() # Efacez TOUT depuis le début.
-                                cursor.close()
-                                self.db.close_db()
-                                raise ValueError(
-                                    f"Valeur invalide envoyée dans les creneaux_hp.\n"
-                                    f"Interruption complète de l'insertion.\n"
-                                    f"Erreur SQLite: {e}"
-                                ) from e
-
-                    except sqlite3.IntegrityError as e:
-                        self.db.connexion.rollback() # Efacez TOUT depuis le début.
-                        cursor.close()
-                        self.db.close_db()
-                        raise ValueError(
-                            f"Valeur invalide envoyée dans les prix.\n"
-                            f"Interruption complète de l'insertion.\n"
-                            f"Erreur SQLite: {e}"
-                        ) from e
-                else:
-                    self.db.connexion.rollback() # Efacez TOUT depuis le début.
-                    cursor.close()
-                    self.db.close_db()
-                    raise ValueError(
-                        f"Mode invalide dans les prix.\n"
+                        f"Valeur invalide envoyée dans le planning.\n"
                         f"Interruption complète de l'insertion.\n"
                     )
 
-            # Table 'water_heaters'
-            if client.water_heater:
-                self.db.create_table_water_heaters()
-                donnees_client = (client.client_id, client.water_heater.volume, 
-                                client.water_heater.power, client.water_heater.insulation_coefficient, 
-                                client.water_heater.cold_water_temperature)
+        # Table 'constraints'
+        self.db.create_table_constraints()
+        contraint_id = None # Initialisation importante
+        if client.constraints:
+            # 1. On récupère la matrice numpy (le tableau de chiffres)
+            matrice_numpy = client.constraints.consumption_profile.data
+            
+            # 2. On la transforme en texte JSON pour la BDD
+            # .tolist() transforme le numpy array en liste Python standard
+            profil_json = json.dumps(matrice_numpy.tolist())
+
+            # 3. On prépare les données (Notez qu'on utilise profil_json au lieu de puissance)
+            donnees_constraints = (client.client_id, 
+                                    client.constraints.minimum_temperature, 
+                                    profil_json)
+            try:
+                # ATTENTION: J'ai changé le nom de la colonne dans la requête SQL ci-dessous
+                curseur.execute("""
+                INSERT INTO constraints 
+                (client_id, temperature_minimale, profil_conso_json) 
+                VALUES (?, ?, ?)
+            """, donnees_constraints)
+            except DatabaseIntegrityError:
+                self.db.connexion.rollback() # Efacez TOUT depuis le début.
+                curseur.close()
+                self.db.close_db()
+                raise ValueError(
+                    f"Valeur invalide envoyée dans les contraintes.\n"
+                    f"Interruption complète de l'insertion.\n"
+                )
+                
+            # contraint_id = curseur.lastrowid
+            
+        # Table 'plages_interdites'
+            self.db.create_table_plages_interdites()
+            list_plages_interdites = client.constraints.forbidden_slots
+            for plage_interdite in list_plages_interdites:
+                donnees_client = (client.client_id, plage_interdite.start, plage_interdite.end)
                 try:
-                    cursor.execute("""
-                        INSERT OR IGNORE INTO water_heaters
-                        (client_id, volume, power, coeff_isolation, temperature_eau_froide_celsius) 
-                        VALUES (?, ?, ?, ?, ?)
-                    """, donnees_client)
-                except sqlite3.IntegrityError as e:
+                    curseur.execute("""
+                    INSERT INTO plages_interdites
+                    (client_id, heure_debut, heure_fin)
+                    VALUES (?, ?, ?)
+                """, donnees_client)
+                except DatabaseIntegrityError:
                     self.db.connexion.rollback() # Efacez TOUT depuis le début.
-                    cursor.close()
+                    curseur.close()
                     self.db.close_db()
                     raise ValueError(
-                        f"Valeur invalide envoyée dans les water_heaters.\n"
+                        f"Valeur invalide envoyée dans les plages interdites.\n"
                         f"Interruption complète de l'insertion.\n"
-                        f"Erreur SQLite: {e}"
-                    ) from e
+                    )
+            
+        # Table 'prices'
+        self.db.create_table_prices()
+        if client.prices:
+            if client.prices.mode == 'BASE':
+                donnees_client = [(client.client_id, 'base', client.prices.base),
+                                    (client.client_id, 'revente', client.prices.resale_price)]
+                try:
+                    curseur.executemany("""
+                        INSERT INTO prices 
+                        (client_id, type, prix) 
+                        VALUES (?, ?, ?)
+                    """, donnees_client)
+                except DatabaseIntegrityError:
+                    self.db.connexion.rollback() # Efacez TOUT depuis le début.
+                    curseur.close()
+                    self.db.close_db()
+                    raise ValueError(
+                        f"Valeur invalide envoyée dans les prix.\n"
+                        f"Interruption complète de l'insertion.\n"
+                    )
+            elif client.prices.mode == 'HPHC':
+                donnees_client = [(client.client_id, 'hp', client.prices.hp),
+                                    (client.client_id, 'hc', client.prices.hc),
+                                    (client.client_id, 'revente', client.prices.resale_price)]
+                try:
+                    curseur.executemany("""
+                        INSERT INTO prices 
+                        (client_id, type, prix) 
+                        VALUES (?, ?, ?)
+                    """, donnees_client)
 
-            self.db.connexion.commit() # Sauvegarder en disque
+        # Table 'creneaux_hp'
+                    self.db.create_table_creneaux_hp()
+                    list_creneaux_hp = client.prices.hp_slots
+                    for creneau_hp in list_creneaux_hp:
+                        donnees_client = (client.client_id, creneau_hp.start, creneau_hp.end)
+                        try:
+                            curseur.executemany("""
+                                INSERT INTO creneaux_hp  
+                                (client_id, heure_debut, heure_fin) 
+                                VALUES (?, ?, ?)
+                            """, donnees_client)
+                        except DatabaseIntegrityError:
+                            self.db.connexion.rollback() # Efacez TOUT depuis le début.
+                            curseur.close()
+                            self.db.close_db()
+                            raise ValueError(
+                                f"Valeur invalide envoyée dans les creneaux_hp.\n"
+                                f"Interruption complète de l'insertion.\n"
+                            )
 
-        except sqlite3.Error as e:
-            raise ConnectionError(
-                f"Impossible de se connecter à la base de données.\n"
-                f"Chemin: {self.path_db}\n"
-                f"Erreur SQLite: {e}"
-            ) from e
-        finally:
-            cursor.close()
-            self.db.close_db()
+                except DatabaseIntegrityError:
+                    self.db.connexion.rollback() # Efacez TOUT depuis le début.
+                    curseur.close()
+                    self.db.close_db()
+                    raise ValueError(
+                        f"Valeur invalide envoyée dans les prix.\n"
+                        f"Interruption complète de l'insertion.\n"
+                    )
+            else:
+                self.db.connexion.rollback() # Efacez TOUT depuis le début.
+                curseur.close()
+                self.db.close_db()
+                raise ValueError(
+                    f"Mode invalide dans les prix.\n"
+                    f"Interruption complète de l'insertion.\n"
+                )
+
+        # Table 'water_heaters'
+        if client.water_heater:
+            self.db.create_table_water_heaters()
+            donnees_client = (client.client_id, client.water_heater.volume, 
+                            client.water_heater.power, client.water_heater.insulation_coefficient, 
+                            client.water_heater.cold_water_temperature)
+            try:
+                curseur.execute("""
+                    INSERT INTO water_heaters
+                    (client_id, volume, power, coeff_isolation, temperature_eau_froide_celsius) 
+                    VALUES (?, ?, ?, ?, ?)
+                """, donnees_client)
+            except DatabaseIntegrityError:
+                self.db.connexion.rollback() # Efacez TOUT depuis le début.
+                curseur.close()
+                self.db.close_db()
+                raise ValueError(
+                    f"Valeur invalide envoyée dans les water_heaters.\n"
+                    f"Interruption complète de l'insertion.\n"
+                )
+
+        self.db.connexion.commit() # Sauvegarder en disque
+        curseur.close()
+        self.db.close_db()
         
-
     def reconstitute_client(self, client_id : int = 0) -> Client :
         """Fonction pour reconstituer un client à partir de son ID. 
         Args : 
@@ -271,286 +244,259 @@ class ClientManager :
         Returns : 
         - client : Objet de type Client reconstitué (voir models) 
         Raises : 
-        - DataBaseError : Si accès impossible à la base de données 
+        - DatabaseConnexionError : Si accès impossible à la base de données 
         - ClientNotFound : Si aucun client n'a l'ID client_id 
-        - ValueError : Si entrées non conformes. 
+        - ValueError : Si l'entrée n'est pas conforme.
         """
-        #TODO : Prend le client_id et renvoie le client qui porte ce id. 
         #La fonction va aller chercher dans la BDD pour reconstituer les éléments concrets du client. 
+
+        # Test de type de l'ID du client
+        if not isinstance(client_id, int):
+            raise ValueError("L'ID du client doit être un doit être un nombre entier.")
 
         # Connection avec le BDD
         try:
-            self.db.connect_db()
-            print(f"Connecté à la base de données: {self.path_db}")
+            self.db.connect_db()        
+        except DatabaseConnexionError:
+            raise DatabaseConnexionError(
+                f"Impossible de se connecter à la base de données.\n"
+                f"Chemin: {self.path_db}\n"
+            )         
+
+        print(f"Connecté à la base de données: {self.path_db}")
             
-            # Configurer pour retourner des dictionnaires
-            self.db.connexion.row_factory = sqlite3.Row
-            
-            # Créer un curseur pour exécuter les requêtes
-            curseur = self.db.connexion.cursor()
-            
-            ########################################################################
-            #  Exécuter la requête SQL pour trouver les donnees de la table 'clients'
-            ########################################################################
-            curseur.execute("SELECT client_id, gradation, mode FROM clients WHERE client_id=?", (client_id,))
-            
-            # Récupérer tous les résultats
-            enregistrements = curseur.fetchall()
-            
-            if not enregistrements:
-                raise ValueError(f"Aucun client avec l'ID {client_id}\n")
-            
+        # Configurer pour retourner des dictionnaires
+        self.db.connexion.row_factory = sqlite3.Row
+        
+        # Créer un curseur pour exécuter les requêtes
+        curseur = self.db.connexion.cursor()
+        
+        ########################################################################
+        #  Exécuter la requête SQL pour trouver les donnees de la table 'clients'
+        ########################################################################
+        curseur.execute("SELECT client_id, gradation, mode FROM clients WHERE client_id=?", (client_id,))
+        
+        # Récupérer tous les résultats
+        enregistrements = curseur.fetchall()
+        
+        if not enregistrements:
+            curseur.close()
+            self.db.close_db()
+            raise ClientNotFound(f"Aucun client avec l'ID {client_id}\n")
+        
+        # Convertir en liste de dictionnaires
+        resultats = []
+        for ligne in enregistrements:
+            resultats.append(dict(ligne))  # Convertit Row en dictionnaire
+        donnes_client = resultats[0]
+
+        ####################################################################################################
+        #  Exécuter la requête SQL pour trouver les donnees de la table 'constraints' et 'plages_interdites'
+        ####################################################################################################
+        
+        curseur.execute(
+            """SELECT ct.temperature_minimale, ct.profil_conso_json, pi.heure_debut, pi.heure_fin
+            FROM constraints ct INNER JOIN plages_interdites pi ON pi.client_id = ct.client_id
+            WHERE ct.client_id=?""", (client_id,)
+            )
+       
+        # Récupérer tous les résultats
+        enregistrements = curseur.fetchall()
+        
+        if not enregistrements:
+            list_donnes_constraints = None
+        else:
             # Convertir en liste de dictionnaires
             resultats = []
             for ligne in enregistrements:
                 resultats.append(dict(ligne))  # Convertit Row en dictionnaire
-            donnes_client = resultats[0]
+            list_donnes_constraints = copy.deepcopy(resultats)
 
-            ####################################################################################################
-            #  Exécuter la requête SQL pour trouver les donnees de la table 'constraints' et 'plages_interdites'
-            ####################################################################################################
-            
-            #BOLC AJOUTÉ : CONSTRAINTS : ##############################################################
-            curseur.execute(
-                """SELECT ct.temperature_minimale, ct.profil_conso_json, pi.heure_debut, pi.heure_fin
-                FROM constraints ct LEFT JOIN plages_interdites pi ON pi.constraint_id = ct.constraint_id
-                WHERE ct.client_id=?""", (client_id,)
-                )
-            #######################FIN DU BLOC#####################################################
-            
-            
-            ################################ANCIEN BLOC : ###########################################
-            #curseur.execute(
-               # """SELECT ct.temperature_minimale, ct.puissance_maison, pi.heure_debut, pi.heure_fin
-              #  FROM constraints ct LEFT JOIN plages_interdites pi ON pi.constraint_id = ct.constraint_id
-              #  WHERE ct.client_id=?""", (client_id,)
-              #  )
-            ###########################################################################################@
-
-
-
-
-
-            # Récupérer tous les résultats
-            enregistrements = curseur.fetchall()
-            
-            if not enregistrements:
-                list_donnes_constraints = None
-            else:
-                # Convertir en liste de dictionnaires
-                resultats = []
-                for ligne in enregistrements:
-                    resultats.append(dict(ligne))  # Convertit Row en dictionnaire
-                list_donnes_constraints = copy.deepcopy(resultats)
-
-            ###############################################################################
-            #  Exécuter la requête SQL pour trouver les donnees de la table 'water_heaters'
-            ###############################################################################
-            curseur.execute("""SELECT volume, power, coeff_isolation, temperature_eau_froide_celsius
-                            FROM water_heaters
-                            WHERE client_id=?""", (client_id,))
-            
-            # Récupérer tous les résultats
-            enregistrements = curseur.fetchall()
-            
-            if not enregistrements:
-                donnes_water_heaters = None
-            else:
-                # Convertir en liste de dictionnaires
-                resultats = []
-                for ligne in enregistrements:
-                    resultats.append(dict(ligne))  # Convertit Row en dictionnaire
-                donnes_water_heaters = resultats[0]
-
-            ###########################################################################
-            #  Exécuter la requête SQL pour trouver les donnees de la table 'consignes'
-            ###########################################################################
-            curseur.execute("""SELECT day, moment, temperature, volume
-                            FROM consignes
-                            WHERE client_id=?""", (client_id,))
-            
-            # Récupérer tous les résultats
-            enregistrements = curseur.fetchall()
-            
-            if not enregistrements:
-                list_donnes_consignes = None
-            else:
-                # Convertir en liste de dictionnaires
-                resultats = []
-                for ligne in enregistrements:
-                    resultats.append(dict(ligne))  # Convertit Row en dictionnaire
-                list_donnes_consignes = copy.deepcopy(resultats)
-
-            ########################################################################
-            #  Exécuter la requête SQL pour trouver les donnees de la table 'prices'
-            ########################################################################
-            curseur.execute(
-                """SELECT type, prix
-                FROM prices
-                WHERE p.client_id=?""", (client_id,)
-                )
-            
-            # Récupérer tous les résultats
-            enregistrements = curseur.fetchall()
-            
-            if not enregistrements:
-                list_donnes_prices = None
-            else:
-                # Convertir en liste de dictionnaires
-                resultats = []
-                for ligne in enregistrements:
-                    resultats.append(dict(ligne))  # Convertit Row en dictionnaire
-                list_donnes_prices = copy.deepcopy(resultats)
-
-            #############################################################################
-            #  Exécuter la requête SQL pour trouver les donnees de la table 'creneaux_hp'
-            #############################################################################
-            curseur.execute(
-                """SELECT heure_debut, heure_fin
-                FROM creneaux_hp
-                WHERE p.client_id=?""", (client_id,)
-                )
-            
-            # Récupérer tous les résultats
-            enregistrements = curseur.fetchall()
-            
-            if not enregistrements:
-                list_donnes_creneaux_hp = None
-            else:
-                # Convertir en liste de dictionnaires
-                resultats = []
-                for ligne in enregistrements:
-                    resultats.append(dict(ligne))  # Convertit Row en dictionnaire
-                list_donnes_creneaux_hp = copy.deepcopy(resultats)
-
-            ##################
-            #  Reconstruction
-            ##################
-
-            # Partie Planning
-            planning_reconstruit = Planning()
-            if list_donnes_consignes:
-                list_setpoints = []
-                for consigne in list_donnes_consignes:
-                    list_setpoints.append(Setpoint(consigne['day'], consigne['moment'],
-                                                   consigne['temperature'], consigne['volume']))
-                planning_reconstruit.setpoints = list_setpoints
-
-            #NOUVELLE PARTIE CONTRAINTES ###############################################################################
-            #---------------------------------------------------------------------------------------------------------######
-            # Partie Constraints (VERSION CORRIGÉE JSON)
-            # Note: Assurez-vous d'avoir "from client_models import ProfilConsommation" en haut
-            
-            constraints_reconstruit = None
-            
-            if list_donnes_constraints:
-                # 1. Gestion des Plages Interdites
-                list_creneaux = []
-                for constraint in list_donnes_constraints:
-                    # Vérification de sécurité si les champs sont non-nuls
-                    if constraint['heure_debut'] and constraint['heure_fin']:
-                        # Conversion robuste str -> time
-                        h_debut = constraint['heure_debut']
-                        if isinstance(h_debut, str): 
-                            h_debut = datetime.strptime(h_debut, '%H:%M:%S').time()
-                            
-                        h_fin = constraint['heure_fin']
-                        if isinstance(h_fin, str): 
-                            h_fin = datetime.strptime(h_fin, '%H:%M:%S').time()
-                            
-                        list_creneaux.append(TimeSlot(h_debut, h_fin))
-                
-                info_constraint = list_donnes_constraints[0]
-                
-                # 2. Gestion du Profil de Consommation (Lecture du JSON)
-                json_text = info_constraint['profil_conso_json']
-                
-                if json_text:
-                    # On transforme le texte JSON de la BDD en objet ProfilConsommation
-                    data_list = json.loads(json_text)
-                    matrice_numpy = np.array(data_list)
-                    profil_objet = ConsumptionProfile(matrix_7x24=matrice_numpy)
-                else:
-                    profil_objet = ConsumptionProfile() # Profil par défaut si vide
-                
-                # 3. Création de l'objet final
-                # L'ordre des arguments respecte maintenant votre constraints.py
-                constraints_reconstruit = Constraints(
-                    consumption_profile=profil_objet,
-                    forbidden_slots=list_creneaux,
-                    minimum_temperature=info_constraint['temperature_minimale']
-                )
-            else:
-                # Si le client n'a aucune contrainte en BDD
-                constraints_reconstruit = Constraints()
-
-
-
-
-
-            # Partie Constraints - en commentaires (à supprimer) : 
-            #if list_donnes_constraints:
-              #  list_creneaux = []
-               # for constraint in list_donnes_constraints:
-                 #   list_creneaux.append(Creneau(constraint['heure_debut'], constraint['heure_fin']))
-                #constraint = list_donnes_constraints[0]
-                #constraints_reconstruit = Constraints(list_creneaux, constraint['temperature_minimale'],
-                                                      #constraint['puissance_maison'])
-           # else:
-                #constraints_reconstruit = Constraints()
-
-            # Partie Features
-            if donnes_client['gradation'] == 1:
-                features_reconstruit = Features(True, donnes_client['mode'])
-            else:
-                features_reconstruit = Features(False, donnes_client['mode'])
-                    
-            # Partie Prices
-            prix_reconstruit = Prices()
-            if list_donnes_prices:
-                for price in list_donnes_prices:
-                    if price['type'] == 'base':
-                        prix_reconstruit.base = price['prix']
-                    elif price['type'] == 'revente':
-                        prix_reconstruit.resale_price = price['prix']
-                prix_reconstruit.mode = 'HPHC'
-                for price in list_donnes_prices:
-                    if price['type'] == 'hp':
-                        prix_reconstruit.hp = price['prix']
-                    elif price['type'] == 'hc':
-                        prix_reconstruit.hc = price['prix']
-                list_creneaux_hp = []
-                for creneau_hp in list_donnes_creneaux_hp:
-                    list_creneaux_hp.append(TimeSlot(creneau_hp['heure_debut'], creneau_hp['heure_fin']))
-                prix_reconstruit.hp_slots = list_creneaux_hp
-
-            # Partie WaterHeater
-            water_heater_reconstruit = WaterHeater(donnes_water_heaters['volume'],
-                                                   donnes_water_heaters['power'])
-            water_heater_reconstruit.insulation_coefficient = donnes_water_heaters['coeff_isolation']
-            water_heater_reconstruit.cold_water_temperature = donnes_water_heaters['temperature_eau_froide_celsius']
-
-                
-            client_reconstruit = Client(
-                planning=planning_reconstruit, 
-                constraints=constraints_reconstruit, 
-                features=features_reconstruit, 
-                prices=prix_reconstruit, 
-                water_heater=water_heater_reconstruit, 
-                client_id=donnes_client['client_id']
-            )
-            
-            return client_reconstruit
+        ###############################################################################
+        #  Exécuter la requête SQL pour trouver les donnees de la table 'water_heaters'
+        ###############################################################################
+        curseur.execute("""SELECT volume, power, coeff_isolation, temperature_eau_froide_celsius
+                        FROM water_heaters
+                        WHERE client_id=?""", (client_id,))
         
-        except sqlite3.Error as e:
-            raise ConnectionError(
-                f"Impossible de se connecter à la base de données.\n"
-                f"Chemin: {self.path_db}\n"
-                f"Erreur SQLite: {e}"
-            ) from e
-        finally:
-            curseur.close()
-            self.db.close_db()
+        # Récupérer tous les résultats
+        enregistrements = curseur.fetchall()
+        
+        if not enregistrements:
+            donnes_water_heaters = None
+        else:
+            # Convertir en liste de dictionnaires
+            resultats = []
+            for ligne in enregistrements:
+                resultats.append(dict(ligne))  # Convertit Row en dictionnaire
+            donnes_water_heaters = resultats[0]
+
+        ###########################################################################
+        #  Exécuter la requête SQL pour trouver les donnees de la table 'consignes'
+        ###########################################################################
+        curseur.execute("""SELECT day, moment, temperature, volume
+                        FROM consignes
+                        WHERE client_id=?""", (client_id,))
+        
+        # Récupérer tous les résultats
+        enregistrements = curseur.fetchall()
+        
+        if not enregistrements:
+            list_donnes_consignes = None
+        else:
+            # Convertir en liste de dictionnaires
+            resultats = []
+            for ligne in enregistrements:
+                resultats.append(dict(ligne))  # Convertit Row en dictionnaire
+            list_donnes_consignes = copy.deepcopy(resultats)
+
+        ########################################################################
+        #  Exécuter la requête SQL pour trouver les donnees de la table 'prices'
+        ########################################################################
+        curseur.execute(
+            """SELECT type, prix
+            FROM prices
+            WHERE p.client_id=?""", (client_id,)
+            )
+        
+        # Récupérer tous les résultats
+        enregistrements = curseur.fetchall()
+        
+        if not enregistrements:
+            list_donnes_prices = None
+        else:
+            # Convertir en liste de dictionnaires
+            resultats = []
+            for ligne in enregistrements:
+                resultats.append(dict(ligne))  # Convertit Row en dictionnaire
+            list_donnes_prices = copy.deepcopy(resultats)
+
+        #############################################################################
+        #  Exécuter la requête SQL pour trouver les donnees de la table 'creneaux_hp'
+        #############################################################################
+        curseur.execute(
+            """SELECT heure_debut, heure_fin
+            FROM creneaux_hp
+            WHERE p.client_id=?""", (client_id,)
+            )
+        
+        # Récupérer tous les résultats
+        enregistrements = curseur.fetchall()
+        
+        if not enregistrements:
+            list_donnes_creneaux_hp = None
+        else:
+            # Convertir en liste de dictionnaires
+            resultats = []
+            for ligne in enregistrements:
+                resultats.append(dict(ligne))  # Convertit Row en dictionnaire
+            list_donnes_creneaux_hp = copy.deepcopy(resultats)
+
+        ##################
+        #  Reconstruction
+        ##################
+
+        # Partie Planning
+        planning_reconstruit = Planning()
+        if list_donnes_consignes:
+            list_setpoints = []
+            for consigne in list_donnes_consignes:
+                list_setpoints.append(Setpoint(consigne['day'], consigne['moment'],
+                                                consigne['temperature'], consigne['volume']))
+            planning_reconstruit.setpoints = list_setpoints
+
+        #NOUVELLE PARTIE CONTRAINTES ###############################################################################
+        #---------------------------------------------------------------------------------------------------------######
+        # Partie Constraints (VERSION CORRIGÉE JSON)
+        # Note: Assurez-vous d'avoir "from client_models import ProfilConsommation" en haut
+        
+        constraints_reconstruit = None
+        
+        if list_donnes_constraints:
+            # 1. Gestion des Plages Interdites
+            list_creneaux = []
+            for constraint in list_donnes_constraints:
+                # Vérification de sécurité si les champs sont non-nuls
+                if constraint['heure_debut'] and constraint['heure_fin']:
+                    # Conversion robuste str -> time
+                    h_debut = constraint['heure_debut']
+                    if isinstance(h_debut, str): 
+                        h_debut = datetime.strptime(h_debut, '%H:%M:%S').time()
+                        
+                    h_fin = constraint['heure_fin']
+                    if isinstance(h_fin, str): 
+                        h_fin = datetime.strptime(h_fin, '%H:%M:%S').time()
+                        
+                    list_creneaux.append(TimeSlot(h_debut, h_fin))
+            
+            info_constraint = list_donnes_constraints[0]
+            
+            # 2. Gestion du Profil de Consommation (Lecture du JSON)
+            json_text = info_constraint['profil_conso_json']
+            
+            if json_text:
+                # On transforme le texte JSON de la BDD en objet ProfilConsommation
+                data_list = json.loads(json_text)
+                matrice_numpy = np.array(data_list)
+                profil_objet = ConsumptionProfile(matrix_7x24=matrice_numpy)
+            else:
+                profil_objet = ConsumptionProfile() # Profil par défaut si vide
+            
+            # 3. Création de l'objet final
+            # L'ordre des arguments respecte maintenant votre constraints.py
+            constraints_reconstruit = Constraints(
+                consumption_profile=profil_objet,
+                forbidden_slots=list_creneaux,
+                minimum_temperature=info_constraint['temperature_minimale']
+            )
+        else:
+            # Si le client n'a aucune contrainte en BDD
+            constraints_reconstruit = Constraints()
+
+        # Partie Features
+        if donnes_client['gradation'] == 1:
+            features_reconstruit = Features(True, donnes_client['mode'])
+        else:
+            features_reconstruit = Features(False, donnes_client['mode'])
+                
+        # Partie Prices
+        prix_reconstruit = Prices()
+        if list_donnes_prices:
+            for price in list_donnes_prices:
+                if price['type'] == 'base':
+                    prix_reconstruit.base = price['prix']
+                elif price['type'] == 'revente':
+                    prix_reconstruit.resale_price = price['prix']
+            prix_reconstruit.mode = 'HPHC'
+            for price in list_donnes_prices:
+                if price['type'] == 'hp':
+                    prix_reconstruit.hp = price['prix']
+                elif price['type'] == 'hc':
+                    prix_reconstruit.hc = price['prix']
+            list_creneaux_hp = []
+            for creneau_hp in list_donnes_creneaux_hp:
+                list_creneaux_hp.append(TimeSlot(creneau_hp['heure_debut'], creneau_hp['heure_fin']))
+            prix_reconstruit.hp_slots = list_creneaux_hp
+
+        # Partie WaterHeater
+        water_heater_reconstruit = WaterHeater(donnes_water_heaters['volume'],
+                                                donnes_water_heaters['power'])
+        water_heater_reconstruit.insulation_coefficient = donnes_water_heaters['coeff_isolation']
+        water_heater_reconstruit.cold_water_temperature = donnes_water_heaters['temperature_eau_froide_celsius']
+
+            
+        client_reconstruit = Client(
+            planning=planning_reconstruit, 
+            constraints=constraints_reconstruit, 
+            features=features_reconstruit, 
+            prices=prix_reconstruit, 
+            water_heater=water_heater_reconstruit, 
+            client_id=donnes_client['client_id']
+        )
+
+        curseur.close()
+        self.db.close_db()
+        return client_reconstruit
     
     def delete_client(self, client_id : int) :
         """Fonction qui supprime le client de la BDD. 
@@ -560,11 +506,42 @@ class ClientManager :
         - None : Rien sauf suppression dans la BDD. 
         Raises : 
         - ValueError : Si l'entrée n'est pas conforme. 
-        - DataBaseError : Si l'accès à la BDD est impossible 
+        - DatabaseConnexionError : Si l'accès à la BDD est impossible 
         - ClientNotFound : Si le client n'existe pas dans la base de données. """ 
-        #TODO : Cette fonction supprime le client de la BDD. 
 
+        # Test de type de l'ID du client
+        if not isinstance(client_id, int):
+            raise ValueError("L'ID du client doit être un doit être un nombre entier.")
 
+        # Connection avec le BDD
+        try:
+            self.db.connect_db()        
+        except DatabaseConnexionError:
+            raise DatabaseConnexionError(
+                f"Impossible de se connecter à la base de données.\n"
+                f"Chemin: {self.path_db}\n"
+            )         
+
+        print(f"Connecté à la base de données: {self.path_db}")
+            
+        # Configurer pour retourner des dictionnaires
+        self.db.connexion.row_factory = sqlite3.Row
+        
+        # Créer un curseur pour exécuter le requête
+        curseur = self.db.connexion.cursor()
+
+        curseur.execute("DELETE FROM clients WHERE client_id = ?", (client_id,))
+        
+        # Récupérer tous les résultats
+        lignes_concernees = curseur.rowcount()
+
+        self.db.connexion.commit() # Sauvegarder en disque
+        curseur.close()
+        self.db.close_db()
+        
+        if not lignes_concernees:
+            raise ClientNotFound(f"Aucun client avec l'ID {client_id}\n")
+        
     def update_client_in_db(self, client : Client, 
                       planning : Planning = None, 
                       features : Features = None, 
@@ -585,12 +562,225 @@ class ClientManager :
         - None : Rien sauf mise à jour dans la BDD. 
         Raises :
         - ValueError : Si les entrées ne sont pas conformes.
-        - DataBaseError : Si l'accès à la BDD est impossible.
+        - DatabaseConnexionError : Si l'accès à la BDD est impossible.
         - ClientNotFound : Si le client n'existe pas dans la base de données."""
-        #Todo : Cette fonction, prend en argument les éléments qui sont pas des None et met à jour le client dans la BDD. 
-        pass 
         #Cette fonction est super intéressante pour le module de gestionnaire d'habitudes qui met à jour constamment le planning. 
-    
+
+        # Test de type de l'ID du client
+        if not isinstance(client.client_id, int):
+            raise ValueError("L'ID du client doit être un doit être un nombre entier.")
+
+        # Connection avec le BDD
+        try:
+            self.db.connect_db()        
+        except DatabaseConnexionError:
+            raise DatabaseConnexionError(
+                f"Impossible de se connecter à la base de données.\n"
+                f"Chemin: {self.path_db}\n"
+            )         
+
+        print(f"Connecté à la base de données: {self.path_db}")
+            
+        # Configurer pour retourner des dictionnaires
+        self.db.connexion.row_factory = sqlite3.Row
+        
+        # Créer un curseur pour exécuter le requête
+        curseur = self.db.connexion.cursor()
+
+        # Table 'clients'
+        donnees_client = (client.client_id, client.features.gradation(), client.features.mode()) 
+        try:
+            curseur.execute("""
+                INSERT INTO clients 
+                (client_id, gradation, mode) 
+                VALUES (?, ?, ?) ON CONFLICT(client_id) DO UPDATE SET
+                gradation = excluded.gradation,
+                mode = excluded.mode
+            """, donnees_client)
+        except DatabaseIntegrityError:
+            curseur.close()
+            self.db.close_db()
+            raise ValueError(
+                f"Valeurs invalides pour la gradation ou le mode.\n"
+                f"Interruption complète du changement.\n"
+            )
+        
+        # Récupérer tous les résultats
+        lignes_concernees = curseur.rowcount()
+        
+        if not lignes_concernees:
+            curseur.close()
+            self.db.close_db()
+            raise ClientNotFound(f"Aucun client avec l'ID {client.client_id}\n")
+
+        # Table 'consignes'
+        if planning:
+            list_consignes = planning.setpoints
+            for consigne in list_consignes:
+                donnees_client = (client.client_id, consigne.day, consigne.time, 
+                                    consigne.temperature, consigne.drawn_volume) 
+                try:
+                    curseur.execute("""
+                    INSERT INTO consignes 
+                    (client_id, day, moment, temperature, volume) 
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(client_id, day, moment) DO UPDATE SET
+                        temperature = excluded.temperature,
+                        volume = excluded.volume
+                """, donnees_client)
+                except DatabaseIntegrityError:
+                    curseur.close()
+                    self.db.close_db()
+                    raise ValueError(
+                        f"Valeur invalide envoyée dans le planning.\n"
+                        f"Interruption complète du changement.\n"
+                    )
+
+        # Table 'constraints'
+        # contraint_id = None # Initialisation importante
+        if constraints:
+            # 1. On récupère la matrice numpy (le tableau de chiffres)
+            matrice_numpy = constraints.consumption_profile.data
+            
+            # 2. On la transforme en texte JSON pour la BDD
+            # .tolist() transforme le numpy array en liste Python standard
+            profil_json = json.dumps(matrice_numpy.tolist())
+
+            # 3. On prépare les données (Notez qu'on utilise profil_json au lieu de puissance)
+            donnees_constraints = (client.client_id,
+                                   constraints.minimum_temperature, 
+                                    profil_json)
+            try:
+                # ATTENTION: J'ai changé le nom de la colonne dans la requête SQL ci-dessous
+                curseur.execute("""
+                INSERT INTO constraints 
+                (client_id, temperature_minimale, profil_conso_json)
+                VALUES (?, ?, ?)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    temperature_minimale = excluded.temperature_minimale,
+                    profil_conso_json = excluded.profil_conso_json
+            """, donnees_constraints)
+            except DatabaseIntegrityError:
+                curseur.close()
+                self.db.close_db()
+                raise ValueError(
+                    f"Valeur invalide envoyée dans les contraintes.\n"
+                    f"Interruption complète du changement.\n"
+                )
+                
+            # contraint_id = curseur.lastrowid
+            
+        # Table 'plages_interdites'
+            curseur.execute("DELETE FROM plages_interdites WHERE client_id = ?", (client.client_id,))
+            list_plages_interdites = constraints.forbidden_slots
+            for plage_interdite in list_plages_interdites:
+                donnees_client = (client.client_id, plage_interdite.start, plage_interdite.end)
+                try:
+                    curseur.execute("""
+                    INSERT INTO plages_interdites
+                    (client_id, heure_debut, heure_fin)
+                    VALUES (?, ?, ?)
+                """, donnees_client)
+                except DatabaseIntegrityError:
+                    curseur.close()
+                    self.db.close_db()
+                    raise ValueError(
+                        f"Valeur invalide envoyée dans les plages interdites.\n"
+                        f"Interruption complète du changement.\n"
+                    )
+            
+        # Table 'prices'
+        if prices:
+            if prices.mode == 'BASE':
+                donnees_client = [(client.client_id, 'base', prices.base),
+                                    (client.client_id, 'revente', prices.resale_price)]
+                try:
+                    curseur.executemany("""
+                        INSERT INTO prices 
+                        (client_id, type, prix) 
+                        VALUES (?, ?, ?) ON CONFLICT(client_id, type) DO UPDATE SET
+                        prix = excluded.prix
+                    """, donnees_client)
+                except DatabaseIntegrityError:
+                    curseur.close()
+                    self.db.close_db()
+                    raise ValueError(
+                        f"Valeur invalide envoyée dans les prix.\n"
+                        f"Interruption complète du changement.\n"
+                    )
+            elif prices.mode == 'HPHC':
+                donnees_client = [(client.client_id, 'hp', prices.hp),
+                                    (client.client_id, 'hc', prices.hc),
+                                    (client.client_id, 'revente', prices.resale_price)]
+                try:
+                    curseur.executemany("""
+                        INSERT INTO prices 
+                        (client_id, type, prix) 
+                        VALUES (?, ?, ?) ON CONFLICT(client_id, type) DO UPDATE SET
+                        prix = excluded.prix
+                    """, donnees_client)
+
+        # Table 'creneaux_hp'
+                    curseur.execute("DELETE FROM creneaux_hp WHERE client_id = ?", (client.client_id,))
+                    list_creneaux_hp = prices.hp_slots
+                    for creneau_hp in list_creneaux_hp:
+                        donnees_client = (client.client_id, creneau_hp.start, creneau_hp.end)
+                        try:
+                            curseur.executemany("""
+                                INSERT INTO creneaux_hp 
+                                (client_id, heure_debut, heure_fin) 
+                                VALUES (?, ?, ?)
+                            """, donnees_client)
+                        except DatabaseIntegrityError:
+                            curseur.close()
+                            self.db.close_db()
+                            raise ValueError(
+                                f"Valeur invalide envoyée dans les creneaux_hp.\n"
+                                f"Interruption complète du changement.\n"
+                            )
+
+                except DatabaseIntegrityError:
+                    curseur.close()
+                    self.db.close_db()
+                    raise ValueError(
+                        f"Valeur invalide envoyée dans les prix.\n"
+                        f"Interruption complète de l'insertion.\n"
+                    )
+            else:
+                curseur.close()
+                self.db.close_db()
+                raise ValueError(
+                    f"Mode invalide dans les prix.\n"
+                    f"Interruption complète de l'insertion.\n"
+                )
+
+        # Table 'water_heaters'
+        if client.water_heater:
+            donnees_client = (client.client_id, client.water_heater.volume, 
+                            client.water_heater.power, client.water_heater.insulation_coefficient, 
+                            client.water_heater.cold_water_temperature)
+            try:
+                curseur.execute("""
+                    INSERT INTO water_heaters
+                    (client_id, volume, power, coeff_isolation, temperature_eau_froide_celsius) 
+                    VALUES (?, ?, ?, ?, ?) ON CONFLICT(client_id) DO UPDATE SET
+                    volume = excluded.volume,
+                    power = excluded.power,
+                    coeff_isolation = excluded.coeff_isolation,
+                    temperature_eau_froide_celsius = excluded.temperature_eau_froide_celsius
+                """, donnees_client)
+            except DatabaseIntegrityError:
+                curseur.close()
+                self.db.close_db()
+                raise ValueError(
+                    f"Valeur invalide envoyée dans les water_heaters.\n"
+                    f"Interruption complète du changement.\n"
+                )
+
+        self.db.connexion.commit() # Sauvegarder en disque
+        curseur.close()
+        self.db.close_db()
+
     def list_all_clients(self) -> list :
         """Fonction qui liste tous les clients dans la BDD. 
         Args : 
@@ -598,20 +788,31 @@ class ClientManager :
         Returns : 
         - liste_clients : liste d'objets de type int (les clients_id)  
         Raises : 
-        - DataBaseError : Si l'accès à la BDD est impossible. 
+        - DatabaseConnexionError : Si l'accès à la BDD est impossible. 
         """
         #TODO : Le but est de retourner la liste de tous les clients dans la BDD. 
-        pass
+        # Connection avec le BDD
+        try:
+            self.db.connect_db()        
+        except DatabaseConnexionError:
+            raise DatabaseConnexionError(
+                f"Impossible de se connecter à la base de données.\n"
+                f"Chemin: {self.path_db}\n"
+            )         
 
+        print(f"Connecté à la base de données: {self.path_db}")
+            
+        # Configurer pour retourner des dictionnaires
+        self.db.connexion.row_factory = sqlite3.Row
+        
+        # Créer un curseur pour exécuter la requête
+        curseur = self.db.connexion.cursor()
+        
+        # Faire la requête
+        curseur.execute("SELECT client_id FROM clients")
+        
+        # Récupérer tous les résultats
+        rows = curseur.fetchall()
+        liste_clients = [row["client_id"] for row in rows]
 
-
-
-
-
-
-
-
-
-
-
-
+        return liste_clients
