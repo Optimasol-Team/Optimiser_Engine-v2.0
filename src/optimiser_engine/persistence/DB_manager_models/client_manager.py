@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 import json  # <--- AJOUTER CECI
 import numpy as np # <--- AJOUTER CECI
-from ...domain import Client, Features, Planning, Constraints, Prices, WaterHeater, Setpoint, TimeSlot, ConsumptionProfile
+from ...domain import Client, Features, Planning, Constraints, Prices, WaterHeater, Setpoint, TimeSlot, ConsumptionProfile, OptimizationMode
 ########################################################################################################
 
 chemin_base = Path(__file__).parent.parent
@@ -18,7 +18,7 @@ sys.path.append(str(chemin_base / 'client_models'))
 from .base_db import Database
 import sqlite3
 import os
-from datetime import datetime
+from datetime import datetime, time
 import copy
 from .exceptions_db import *
 
@@ -53,7 +53,16 @@ class ClientManager :
 
         # Table 'clients'
         self.db.create_table_clients()
-        donnees_client = (client.client_id, client.features.gradation(), client.features.mode()) 
+        if client.features.gradation:
+            if client.features.mode == OptimizationMode.AUTOCONS:
+                donnees_client = (client.client_id, 1, "AutoCons")
+            else:
+                donnees_client = (client.client_id, 1, "cost")
+        else:
+            if client.features.mode == OptimizationMode.AUTOCONS:
+                donnees_client = (client.client_id, 0, "AutoCons")
+            else:
+                donnees_client = (client.client_id, 0, "cost")
         try:
             curseur.execute("""
                 INSERT INTO clients 
@@ -179,9 +188,9 @@ class ClientManager :
                     self.db.create_table_creneaux_hp()
                     list_creneaux_hp = client.prices.hp_slots
                     for creneau_hp in list_creneaux_hp:
-                        donnees_client = (client.client_id, creneau_hp.start, creneau_hp.end)
+                        donnees_client = (client.client_id, creneau_hp.start.isoformat(), creneau_hp.end.isoformat())
                         try:
-                            curseur.executemany("""
+                            curseur.execute("""
                                 INSERT INTO creneaux_hp  
                                 (client_id, heure_debut, heure_fin) 
                                 VALUES (?, ?, ?)
@@ -296,7 +305,7 @@ class ClientManager :
         
         curseur.execute(
             """SELECT ct.temperature_minimale, ct.profil_conso_json, pi.heure_debut, pi.heure_fin
-            FROM constraints ct INNER JOIN plages_interdites pi ON pi.client_id = ct.client_id
+            FROM constraints ct LEFT JOIN plages_interdites pi ON pi.client_id = ct.client_id
             WHERE ct.client_id=?""", (client_id,)
             )
        
@@ -356,7 +365,7 @@ class ClientManager :
         curseur.execute(
             """SELECT type, prix
             FROM prices
-            WHERE p.client_id=?""", (client_id,)
+            WHERE client_id=?""", (client_id,)
             )
         
         # Récupérer tous les résultats
@@ -377,7 +386,7 @@ class ClientManager :
         curseur.execute(
             """SELECT heure_debut, heure_fin
             FROM creneaux_hp
-            WHERE p.client_id=?""", (client_id,)
+            WHERE client_id=?""", (client_id,)
             )
         
         # Récupérer tous les résultats
@@ -389,7 +398,15 @@ class ClientManager :
             # Convertir en liste de dictionnaires
             resultats = []
             for ligne in enregistrements:
-                resultats.append(dict(ligne))  # Convertit Row en dictionnaire
+                # 1. Converte a string do banco (ex: "08:00:00") em objeto datetime.time
+                h_debut = time.fromisoformat(ligne['heure_debut'])
+                h_fin = time.fromisoformat(ligne['heure_fin'])
+                
+                # 2. Instancia o objeto TimeSlot do seu domínio
+                slot = TimeSlot(start=h_debut, end=h_fin)
+                
+                # 3. Adiciona à lista
+                resultats.append(slot)
             list_donnes_creneaux_hp = copy.deepcopy(resultats)
 
         ##################
@@ -455,9 +472,15 @@ class ClientManager :
 
         # Partie Features
         if donnes_client['gradation'] == 1:
-            features_reconstruit = Features(True, donnes_client['mode'])
+            if donnes_client['mode'] == 'AutoCons':
+                features_reconstruit = Features(True, OptimizationMode.AUTOCONS)
+            else:
+                features_reconstruit = Features(True, OptimizationMode.COST)
         else:
-            features_reconstruit = Features(False, donnes_client['mode'])
+            if donnes_client['mode'] == 'AutoCons':
+                features_reconstruit = Features(False, OptimizationMode.AUTOCONS)
+            else:
+                features_reconstruit = Features(False, OptimizationMode.COST)
                 
         # Partie Prices
         prix_reconstruit = Prices()
@@ -473,10 +496,10 @@ class ClientManager :
                     prix_reconstruit.hp = price['prix']
                 elif price['type'] == 'hc':
                     prix_reconstruit.hc = price['prix']
-            list_creneaux_hp = []
-            for creneau_hp in list_donnes_creneaux_hp:
-                list_creneaux_hp.append(TimeSlot(creneau_hp['heure_debut'], creneau_hp['heure_fin']))
-            prix_reconstruit.hp_slots = list_creneaux_hp
+            # list_creneaux_hp = []
+            # for creneau_hp in list_donnes_creneaux_hp:
+            #     list_creneaux_hp.append(TimeSlot(creneau_hp['heure_debut'], creneau_hp['heure_fin']))
+            prix_reconstruit.hp_slots = list_donnes_creneaux_hp
 
         # Partie WaterHeater
         water_heater_reconstruit = WaterHeater(donnes_water_heaters['volume'],
@@ -533,7 +556,7 @@ class ClientManager :
         curseur.execute("DELETE FROM clients WHERE client_id = ?", (client_id,))
         
         # Récupérer tous les résultats
-        lignes_concernees = curseur.rowcount()
+        lignes_concernees = curseur.rowcount
 
         self.db.connexion.commit() # Sauvegarder en disque
         curseur.close()
@@ -588,7 +611,16 @@ class ClientManager :
         curseur = self.db.connexion.cursor()
 
         # Table 'clients'
-        donnees_client = (client.client_id, client.features.gradation(), client.features.mode()) 
+        if client.features.gradation:
+            if client.features.mode == OptimizationMode.AUTOCONS:
+                donnees_client = (client.client_id, 1, "AutoCons")
+            else:
+                donnees_client = (client.client_id, 1, "cost")
+        else:
+            if client.features.mode == OptimizationMode.AUTOCONS:
+                donnees_client = (client.client_id, 0, "AutoCons")
+            else:
+                donnees_client = (client.client_id, 0, "cost")
         try:
             curseur.execute("""
                 INSERT INTO clients 
@@ -606,7 +638,7 @@ class ClientManager :
             )
         
         # Récupérer tous les résultats
-        lignes_concernees = curseur.rowcount()
+        lignes_concernees = curseur.rowcount
         
         if not lignes_concernees:
             curseur.close()
