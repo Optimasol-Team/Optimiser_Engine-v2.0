@@ -258,7 +258,7 @@ class DecisionsManager :
         try:
             curseur.execute("""
                 UPDATE decisions 
-                SET puissance ? 
+                SET puissance = ? 
                 WHERE client_id = ? and date = ?
             """, donnees_client)
         except DatabaseIntegrityError:

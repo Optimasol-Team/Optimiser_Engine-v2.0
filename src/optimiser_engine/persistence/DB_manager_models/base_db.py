@@ -98,7 +98,7 @@ class Database:
             
             FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
             UNIQUE (client_id),
-            CHECK (temperature_minimale > 0 AND temperature_minimale < 95),
+            CHECK (temperature_minimale > 0 AND temperature_minimale < 95)
         );
         """
         self.connexion.execute(sql)
@@ -168,14 +168,13 @@ class Database:
         CREATE TABLE IF NOT EXISTS creneaux_hp (
             creneau_hp_id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id INTEGER,
-            heure_debut TEXT NOT NULL,
-            heure_fin TEXT NOT NULL,
+            heure_debut TEXT,
+            heure_fin TEXT,
             
-            FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
-            UNIQUE (client_id, heure_debut, heure_fin),
-            CHECK (heure_debut < heure_fin)
+            FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE
         );
         """
+        # UNIQUE (client_id, heure_debut, heure_fin)
         self.connexion.execute(sql)
         print("Table 'creneaux_hp' créé")
     
