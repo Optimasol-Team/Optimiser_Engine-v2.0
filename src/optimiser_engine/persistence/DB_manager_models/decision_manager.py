@@ -1,9 +1,6 @@
 """Le but de ce fichier est de contenir la classe DecisionsManager qui gère les décisions pour un client donné.
 Auteur : @laura-campelo""" 
 
-from ...domain import Client, Features, Planning, Constraints, Prices, WaterHeater
-from pathlib import Path
-import pandas as pd 
 from datetime import time, datetime
 from .base_db import Database
 from .exceptions_db import *
@@ -40,7 +37,7 @@ class DecisionsManager :
                 f"Chemin: {self.path_db}\n"
             )         
 
-        print(f"Connecté à la base de données: {self.path_db}")
+        # print(f"Connecté à la base de données: {self.path_db}")
             
         # Configurer pour retourner des dictionnaires
         self.db.connexion.row_factory = sqlite3.Row
@@ -48,7 +45,7 @@ class DecisionsManager :
         # Créer un curseur pour exécuter les requêtes
         curseur = self.db.connexion.cursor()
         
-        self.db.create_table_decisions()
+        self.db.create_all_tables()
         donnees_client = (client_id, date.isoformat(), puissance) 
         try:
             curseur.execute("""
@@ -56,14 +53,16 @@ class DecisionsManager :
                 (client_id, date, puissance) 
                 VALUES (?, ?, ?)
             """, donnees_client)
-        except DatabaseIntegrityError:
+        except sqlite3.IntegrityError as e:
             self.db.connexion.rollback() # Efacez TOUT depuis le début.
             curseur.close()
             self.db.close_db()
+            if "foreign key" in str(e).lower():
+                raise ClientNotFound(f"Impossible de créer une décision : Le client n'existe pas.")
             raise ValueError(
                 f"Valeur invalide envoyée dans la décision.\n"
                 f"Interruption complète de l'insertion.\n"
-            )
+            ) 
         
         self.db.connexion.commit() # Sauvegarder en disque
         curseur.close()
@@ -74,10 +73,10 @@ class DecisionsManager :
         Args : 
         - client_id : int (un entier unique représentant le client dans la BDD) 
         Returns : 
-        - decision : une liste du type [client_id, date, puissance] 
+        - decision : une liste du type {client_id, date, puissance} ordonnée par date 
         Raises : 
         - DatabaseConnexionError : Si accès impossible à la base de données 
-        - ClientNotFound : Si aucun client n'a l'ID client_id 
+        - DecisionNotFound : S'il n'y a pas de décisions pour un client 
         - ValueError : Si l'entrée n'est pas conforme.
         """
 
@@ -94,7 +93,7 @@ class DecisionsManager :
                 f"Chemin: {self.path_db}\n"
             )         
 
-        print(f"Connecté à la base de données: {self.path_db}")
+        # print(f"Connecté à la base de données: {self.path_db}")
             
         # Configurer pour retourner des dictionnaires
         self.db.connexion.row_factory = sqlite3.Row
@@ -110,7 +109,7 @@ class DecisionsManager :
         if not enregistrements:
             curseur.close()
             self.db.close_db()
-            raise ClientNotFound(f"Aucun client avec l'ID {client_id}\n")
+            raise DecisionNotFound(f"Aucune décision pour le client avec l'ID {client_id}\n")
         else:
             # Convertir en liste de dictionnaires
             decisions = []
@@ -135,7 +134,7 @@ class DecisionsManager :
         - DatabaseConnexionError : Si accès impossible à la base de données 
         - ClientNotFound : Si aucun client n'a l'ID client_id 
         - ValueError : Si l'entrée n'est pas conforme.
-        - DecisionNotFoun : Si n'existe pas une décision dans la période desirée.
+        - DecisionNotFound : Si n'existe pas une décision dans la période desirée.
         """
 
         # Test de type de l'ID du client
@@ -151,7 +150,7 @@ class DecisionsManager :
             decisions_ordonnees = self.reconstitute_all_decisions(client_id=client_id)
         except DatabaseConnexionError:
             raise
-        except ClientNotFound:
+        except DecisionNotFound:
             raise
         except ValueError:
             raise
@@ -160,17 +159,17 @@ class DecisionsManager :
         fin = -1
         for d in decisions_ordonnees:
             if d["date"] < date_debut:
-                debut += 1
-            elif d["date"] < date_fin:
-                fin += 1
+                debut = debut + 1
+            elif d["date"] <= date_fin:
+                fin = fin + 1
             else:
                 break
         
         if fin > -1:
             if debut > -1:
-                return decisions_ordonnees[debut:fin]
+                return decisions_ordonnees[debut:fin+1]
             else:
-                return decisions_ordonnees[:fin]
+                return decisions_ordonnees[:fin+1]
         else:
             raise DecisionNotFound("Période sans aucune décision.")         
 
@@ -199,7 +198,7 @@ class DecisionsManager :
                 f"Chemin: {self.path_db}\n"
             )         
 
-        print(f"Connecté à la base de données: {self.path_db}")
+        # print(f"Connecté à la base de données: {self.path_db}")
             
         # Configurer pour retourner des dictionnaires
         self.db.connexion.row_factory = sqlite3.Row
@@ -210,7 +209,52 @@ class DecisionsManager :
         curseur.execute("DELETE FROM decisions WHERE client_id = ? and date = ?", (client_id, date,))
         
         # Récupérer tous les résultats
-        lignes_concernees = curseur.rowcount()
+        lignes_concernees = curseur.rowcount
+
+        self.db.connexion.commit() # Sauvegarder en disque
+        curseur.close()
+        self.db.close_db()
+        
+        if not lignes_concernees:
+            raise ClientNotFound(f"Aucun client avec l'ID {client_id}\n")
+        
+    def delete_all_decisions(self, client_id : int) :
+        """Fonction qui supprime une decision de la BDD. 
+        Args : 
+        - client_id : entier représentant l'ID du client 
+        - date : datetime (la date de la décision)
+        Returns : 
+        - None : Rien sauf suppression dans la BDD. 
+        Raises : 
+        - ValueError : Si l'entrée n'est pas conforme. 
+        - DatabaseConnexionError : Si l'accès à la BDD est impossible 
+        - ClientNotFound : Si le client n'existe pas dans la base de données. """ 
+
+        # Test de type de l'ID du client
+        if not isinstance(client_id, int):
+            raise ValueError("L'ID du client doit être un doit être un nombre entier.")
+
+        # Connection avec le BDD
+        try:
+            self.db.connect_db()        
+        except DatabaseConnexionError:
+            raise DatabaseConnexionError(
+                f"Impossible de se connecter à la base de données.\n"
+                f"Chemin: {self.path_db}\n"
+            )         
+
+        # print(f"Connecté à la base de données: {self.path_db}")
+            
+        # Configurer pour retourner des dictionnaires
+        self.db.connexion.row_factory = sqlite3.Row
+        
+        # Créer un curseur pour exécuter le requête
+        curseur = self.db.connexion.cursor()
+
+        curseur.execute("DELETE FROM decisions WHERE client_id = ?", (client_id,))
+        
+        # Récupérer tous les résultats
+        lignes_concernees = curseur.rowcount
 
         self.db.connexion.commit() # Sauvegarder en disque
         curseur.close()
@@ -245,7 +289,7 @@ class DecisionsManager :
                 f"Chemin: {self.path_db}\n"
             )         
 
-        print(f"Connecté à la base de données: {self.path_db}")
+        # print(f"Connecté à la base de données: {self.path_db}")
             
         # Configurer pour retourner des dictionnaires
         self.db.connexion.row_factory = sqlite3.Row
@@ -253,7 +297,7 @@ class DecisionsManager :
         # Créer un curseur pour exécuter les requêtes
         curseur = self.db.connexion.cursor()
         
-        self.db.create_table_decisions()
+        self.db.create_all_tables()
         donnees_client = (puissance, client_id, date.isoformat()) 
         try:
             curseur.execute("""
@@ -261,16 +305,19 @@ class DecisionsManager :
                 SET puissance = ? 
                 WHERE client_id = ? and date = ?
             """, donnees_client)
-        except DatabaseIntegrityError:
+        except sqlite3.IntegrityError as e:
+            self.db.connexion.rollback() # Efacez TOUT depuis le début.
             curseur.close()
             self.db.close_db()
+            if "foreign key" in str(e).lower():
+                raise ClientNotFound(f"Impossible d'actualiser la décision : Le client n'existe pas.")
             raise ValueError(
                 f"Valeur invalide envoyée dans la décision.\n"
-                f"Interruption complète du changement.\n"
-            )
+                f"Interruption complète de l'insertion.\n"
+            ) 
         
         # Récupérer tous les résultats
-        lignes_concernees = curseur.rowcount()
+        lignes_concernees = curseur.rowcount
 
         self.db.connexion.commit() # Sauvegarder en disque
         curseur.close()
