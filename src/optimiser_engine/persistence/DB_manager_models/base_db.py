@@ -14,7 +14,6 @@ class Database:
 
         Raises :
         - DatabaseConnexionError : si accès impossible à la DB.
-        - DatabaseIntegrityError : si entrées non respectés.
         """
         if chemin_db is None:
             # Chemin par défaut dans le répertoire courant
@@ -56,7 +55,7 @@ class Database:
         except sqlite3.OperationalError:
             raise DatabaseConnexionError("Impossible de se connecter à la base de données.")
         self.connexion.execute("PRAGMA foreign_keys = ON")  # Activer les clés étrangères
-        print(f"Connecté à la base de données: {self.chemin_db}")
+        # print(f"Connecté à la base de données: {self.chemin_db}")
         return True
         
     def close_db(self):
@@ -68,10 +67,12 @@ class Database:
                 print("Connexion déjà fermée")
             except sqlite3.OperationalError:
                 raise DatabaseConnexionError("Erreur lors de la déconnexion de la base de données.")
-            print("Connexion fermée")
+            # print("Connexion fermée")
 
-    def create_table_clients(self):
+    def _create_table_clients(self):
         """Créer la table basée sur le fichier client_models/client.py et client_models/features_models.py"""
+        """Créer le schéma de la base de données en s'assurant d'être connecté"""
+        
         sql = """
         CREATE TABLE IF NOT EXISTS clients (
             client_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,9 +85,10 @@ class Database:
         );
         """
         self.connexion.execute(sql)
-        print("Table 'clients' créé")
+        self.connexion.commit()
+        # print("Table 'clients' créé")
 
-    def create_table_constraints(self):
+    def _create_table_constraints(self):
         """Créer la table basée sur le fichier client_models/constraints.py"""
         # CORRECTION : On remplace 'puissance_maison' (REAL) par 'profil_conso_json' (TEXT)
         sql = """
@@ -102,9 +104,10 @@ class Database:
         );
         """
         self.connexion.execute(sql)
-        print("Table 'constraints' créé (Version JSON)")
+        self.connexion.commit()
+        # print("Table 'constraints' créé (Version JSON)")
 
-    def create_table_plages_interdites(self):
+    def _create_table_plages_interdites(self):
         """Créer la table basée sur le fichier client_models/common.py"""
         sql = """
         CREATE TABLE IF NOT EXISTS plages_interdites (
@@ -119,9 +122,9 @@ class Database:
         );
         """
         self.connexion.execute(sql)
-        print("Table 'plages_interdites' créé")
+        # print("Table 'plages_interdites' créé")
     
-    def create_table_water_heaters(self):
+    def _create_table_water_heaters(self):
         """Créer la table basée sur le fichier client_models/water_heaters.py"""
         sql = """
         CREATE TABLE IF NOT EXISTS water_heaters (
@@ -139,9 +142,10 @@ class Database:
         );
         """
         self.connexion.execute(sql)
-        print("Table 'water_heaters' créé")
+        self.connexion.commit()
+        # print("Table 'water_heaters' créé")
     
-    def create_table_consignes(self):
+    def _create_table_consignes(self):
         """Créer la table basée sur le fichier client_models/consignes_models.py"""
         sql = """
         CREATE TABLE IF NOT EXISTS consignes (
@@ -160,9 +164,10 @@ class Database:
         );
         """
         self.connexion.execute(sql)
-        print("Table 'consignes' créé")
+        self.connexion.commit()
+        # print("Table 'consignes' créé")
     
-    def create_table_creneaux_hp(self):
+    def _create_table_creneaux_hp(self):
         """Créer la table de creneaux_hp basée sur le fichier client_models/prices_model.py"""
         sql = """
         CREATE TABLE IF NOT EXISTS creneaux_hp (
@@ -171,14 +176,15 @@ class Database:
             heure_debut TEXT,
             heure_fin TEXT,
             
-            FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE
+            FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
+            UNIQUE (client_id, heure_debut, heure_fin)
         );
         """
-        # UNIQUE (client_id, heure_debut, heure_fin)
         self.connexion.execute(sql)
-        print("Table 'creneaux_hp' créé")
+        self.connexion.commit()
+        # print("Table 'creneaux_hp' créé")
     
-    def create_table_prices(self):
+    def _create_table_prices(self):
         """Créer la table prices de l'énergie basée sur le fichier client_models/prices_model.py"""
         sql = """
         CREATE TABLE IF NOT EXISTS prices (
@@ -193,9 +199,10 @@ class Database:
         );
         """
         self.connexion.execute(sql)
-        print("Table 'prices' créé")
+        self.connexion.commit()
+        # print("Table 'prices' créé")
 
-    def create_table_decisions(self):
+    def _create_table_decisions(self):
         """Créer la table pour stocker les décisions"""
         sql = """
         CREATE TABLE IF NOT EXISTS decisions (
@@ -210,9 +217,10 @@ class Database:
         );
         """
         self.connexion.execute(sql)
-        print("Table 'decisions' créé")
+        self.connexion.commit()
+        # print("Table 'decisions' créé")
     
-    def create_index(self):
+    def _create_index(self):
         """Créer des index pour améliorer les performances"""
         
         index_liste = [            
@@ -244,7 +252,7 @@ class Database:
             self.connexion.execute(sql)
         
         self.connexion.commit()
-        print("Index créés")
+        # print("Index créés")
     
     def verifier_structure(self):
         """Vérifier si toutes les tables ont été créés"""
@@ -280,30 +288,30 @@ class Database:
         """Créer le schéma de la base de données"""
         
         # 1. Table clients
-        self.create_table_clients()
+        self._create_table_clients()
         
         # 2. Table constraints
-        self.create_table_constraints()
+        self._create_table_constraints()
         
         # 3. Table water_heaters
-        self.create_table_water_heaters()
+        self._create_table_water_heaters()
         
         # 4. Table consignes
-        self.create_table_consignes()
+        self._create_table_consignes()
         
         # 5. Table creneaux_hp
-        self.create_table_creneaux_hp()
+        self._create_table_creneaux_hp()
         
         # 6. Table prices
-        self.create_table_prices()
+        self._create_table_prices()
         
         # 7. Table plages_interdites
-        self.create_table_plages_interdites()
+        self._create_table_plages_interdites()
 
         # 8. Table de decisions
-        self.create_table_decisions()
+        self._create_table_decisions()
         
         # 9. Créer les index
-        self.create_index()
+        self._create_index()
         
-        print("\nToutes les tables ont été créés avec succès!")
+        # print("\nToutes les tables ont été créés avec succès!")

@@ -48,11 +48,12 @@ class ClientManager :
                 f"Chemin: {self.path_db}\n"
             )
             
-        print(f"Connecté à la base de données: {self.path_db}")
+        # print(f"Connecté à la base de données: {self.path_db}")
         curseur = self.db.connexion.cursor()
 
+        self.db.create_all_tables()
+
         # Table 'clients'
-        self.db.create_table_clients()
         if client.features.gradation:
             if client.features.mode == OptimizationMode.AUTOCONS:
                 donnees_client = (client.client_id, 1, "AutoCons")
@@ -69,7 +70,7 @@ class ClientManager :
                 (client_id, gradation, mode) 
                 VALUES (?, ?, ?)
             """, donnees_client)
-        except DatabaseIntegrityError:
+        except sqlite3.IntegrityError:
             self.db.connexion.rollback() # Efacez TOUT depuis le début.
             curseur.close()
             self.db.close_db()
@@ -79,11 +80,10 @@ class ClientManager :
             )
 
         # Table 'consignes'
-        self.db.create_table_consignes()
         if client.planning:
             list_consignes = client.planning.setpoints
             for consigne in list_consignes:
-                donnees_client = (client.client_id, consigne.day, consigne.time, 
+                donnees_client = (client.client_id, consigne.day, consigne.time.isoformat(), 
                                     consigne.temperature, consigne.drawn_volume) 
                 try:
                     curseur.execute("""
@@ -91,7 +91,7 @@ class ClientManager :
                     (client_id, day, moment, temperature, volume) 
                     VALUES (?, ?, ?, ?, ?)
                 """, donnees_client)
-                except DatabaseIntegrityError:
+                except sqlite3.IntegrityError:
                     self.db.connexion.rollback() # Efacez TOUT depuis le début.
                     curseur.close()
                     self.db.close_db()
@@ -101,7 +101,6 @@ class ClientManager :
                     )
 
         # Table 'constraints'
-        self.db.create_table_constraints()
         contraint_id = None # Initialisation importante
         if client.constraints:
             # 1. On récupère la matrice numpy (le tableau de chiffres)
@@ -122,7 +121,7 @@ class ClientManager :
                 (client_id, temperature_minimale, profil_conso_json) 
                 VALUES (?, ?, ?)
             """, donnees_constraints)
-            except DatabaseIntegrityError:
+            except sqlite3.IntegrityError:
                 self.db.connexion.rollback() # Efacez TOUT depuis le début.
                 curseur.close()
                 self.db.close_db()
@@ -134,7 +133,6 @@ class ClientManager :
             # contraint_id = curseur.lastrowid
             
         # Table 'plages_interdites'
-            self.db.create_table_plages_interdites()
             list_plages_interdites = client.constraints.forbidden_slots
             for plage_interdite in list_plages_interdites:
                 donnees_client = (client.client_id, plage_interdite.start, plage_interdite.end)
@@ -144,7 +142,7 @@ class ClientManager :
                     (client_id, heure_debut, heure_fin)
                     VALUES (?, ?, ?)
                 """, donnees_client)
-                except DatabaseIntegrityError:
+                except sqlite3.IntegrityError:
                     self.db.connexion.rollback() # Efacez TOUT depuis le début.
                     curseur.close()
                     self.db.close_db()
@@ -154,7 +152,6 @@ class ClientManager :
                     )
             
         # Table 'prices'
-        self.db.create_table_prices()
         if client.prices:
             if client.prices.mode == 'BASE':
                 donnees_client = [(client.client_id, 'base', client.prices.base),
@@ -165,7 +162,7 @@ class ClientManager :
                         (client_id, type, prix) 
                         VALUES (?, ?, ?)
                     """, donnees_client)
-                except DatabaseIntegrityError:
+                except sqlite3.IntegrityError:
                     self.db.connexion.rollback() # Efacez TOUT depuis le début.
                     curseur.close()
                     self.db.close_db()
@@ -185,7 +182,6 @@ class ClientManager :
                     """, donnees_client)
 
         # Table 'creneaux_hp'
-                    self.db.create_table_creneaux_hp()
                     list_creneaux_hp = client.prices.hp_slots
                     for creneau_hp in list_creneaux_hp:
                         donnees_client = (client.client_id, creneau_hp.start.isoformat(), creneau_hp.end.isoformat())
@@ -195,7 +191,7 @@ class ClientManager :
                                 (client_id, heure_debut, heure_fin) 
                                 VALUES (?, ?, ?)
                             """, donnees_client)
-                        except DatabaseIntegrityError:
+                        except sqlite3.IntegrityError:
                             self.db.connexion.rollback() # Efacez TOUT depuis le début.
                             curseur.close()
                             self.db.close_db()
@@ -204,7 +200,7 @@ class ClientManager :
                                 f"Interruption complète de l'insertion.\n"
                             )
 
-                except DatabaseIntegrityError:
+                except sqlite3.IntegrityError:
                     self.db.connexion.rollback() # Efacez TOUT depuis le début.
                     curseur.close()
                     self.db.close_db()
@@ -223,7 +219,6 @@ class ClientManager :
 
         # Table 'water_heaters'
         if client.water_heater:
-            self.db.create_table_water_heaters()
             donnees_client = (client.client_id, client.water_heater.volume, 
                             client.water_heater.power, client.water_heater.insulation_coefficient, 
                             client.water_heater.cold_water_temperature)
@@ -233,7 +228,7 @@ class ClientManager :
                     (client_id, volume, power, coeff_isolation, temperature_eau_froide_celsius) 
                     VALUES (?, ?, ?, ?, ?)
                 """, donnees_client)
-            except DatabaseIntegrityError:
+            except sqlite3.IntegrityError:
                 self.db.connexion.rollback() # Efacez TOUT depuis le début.
                 curseur.close()
                 self.db.close_db()
@@ -272,7 +267,7 @@ class ClientManager :
                 f"Chemin: {self.path_db}\n"
             )         
 
-        print(f"Connecté à la base de données: {self.path_db}")
+        # print(f"Connecté à la base de données: {self.path_db}")
             
         # Configurer pour retourner des dictionnaires
         self.db.connexion.row_factory = sqlite3.Row
@@ -418,7 +413,7 @@ class ClientManager :
         if list_donnes_consignes:
             list_setpoints = []
             for consigne in list_donnes_consignes:
-                list_setpoints.append(Setpoint(consigne['day'], consigne['moment'],
+                list_setpoints.append(Setpoint(consigne['day'], time.fromisoformat(consigne['moment']),
                                                 consigne['temperature'], consigne['volume']))
             planning_reconstruit.setpoints = list_setpoints
 
@@ -521,7 +516,7 @@ class ClientManager :
         self.db.close_db()
         return client_reconstruit
     
-    def delete_client(self, client_id : int) :
+    def delete_client(self, client_id : int) -> None :
         """Fonction qui supprime le client de la BDD. 
         Args : 
         - client_id : entier représentant l'ID du client 
@@ -545,7 +540,7 @@ class ClientManager :
                 f"Chemin: {self.path_db}\n"
             )         
 
-        print(f"Connecté à la base de données: {self.path_db}")
+        # print(f"Connecté à la base de données: {self.path_db}")
             
         # Configurer pour retourner des dictionnaires
         self.db.connexion.row_factory = sqlite3.Row
@@ -565,7 +560,7 @@ class ClientManager :
         if not lignes_concernees:
             raise ClientNotFound(f"Aucun client avec l'ID {client_id}\n")
         
-    def update_client_in_db(self, client : Client, 
+    def update_client_in_db(self, client_id : int, 
                       planning : Planning = None, 
                       features : Features = None, 
                       constraints : Constraints = None, 
@@ -590,7 +585,7 @@ class ClientManager :
         #Cette fonction est super intéressante pour le module de gestionnaire d'habitudes qui met à jour constamment le planning. 
 
         # Test de type de l'ID du client
-        if not isinstance(client.client_id, int):
+        if not isinstance(client_id, int):
             raise ValueError("L'ID du client doit être un doit être un nombre entier.")
 
         # Connection avec le BDD
@@ -602,7 +597,7 @@ class ClientManager :
                 f"Chemin: {self.path_db}\n"
             )         
 
-        print(f"Connecté à la base de données: {self.path_db}")
+        # print(f"Connecté à la base de données: {self.path_db}")
             
         # Configurer pour retourner des dictionnaires
         self.db.connexion.row_factory = sqlite3.Row
@@ -611,45 +606,47 @@ class ClientManager :
         curseur = self.db.connexion.cursor()
 
         # Table 'clients'
-        if client.features.gradation:
-            if client.features.mode == OptimizationMode.AUTOCONS:
-                donnees_client = (client.client_id, 1, "AutoCons")
+        if features:
+            if features.gradation:
+                if features.mode == OptimizationMode.AUTOCONS:
+                    donnees_client = (client_id, 1, "AutoCons")
+                else:
+                    donnees_client = (client_id, 1, "cost")
             else:
-                donnees_client = (client.client_id, 1, "cost")
-        else:
-            if client.features.mode == OptimizationMode.AUTOCONS:
-                donnees_client = (client.client_id, 0, "AutoCons")
-            else:
-                donnees_client = (client.client_id, 0, "cost")
-        try:
-            curseur.execute("""
-                INSERT INTO clients 
-                (client_id, gradation, mode) 
-                VALUES (?, ?, ?) ON CONFLICT(client_id) DO UPDATE SET
-                gradation = excluded.gradation,
-                mode = excluded.mode
-            """, donnees_client)
-        except DatabaseIntegrityError:
-            curseur.close()
-            self.db.close_db()
-            raise ValueError(
-                f"Valeurs invalides pour la gradation ou le mode.\n"
-                f"Interruption complète du changement.\n"
-            )
-        
-        # Récupérer tous les résultats
-        lignes_concernees = curseur.rowcount
-        
-        if not lignes_concernees:
-            curseur.close()
-            self.db.close_db()
-            raise ClientNotFound(f"Aucun client avec l'ID {client.client_id}\n")
+                if features.mode == OptimizationMode.AUTOCONS:
+                    donnees_client = (client_id, 0, "AutoCons")
+                else:
+                    donnees_client = (client_id, 0, "cost")
+            try:
+                curseur.execute("""
+                    INSERT INTO clients 
+                    (client_id, gradation, mode) 
+                    VALUES (?, ?, ?) ON CONFLICT(client_id) DO UPDATE SET
+                    gradation = excluded.gradation,
+                    mode = excluded.mode
+                """, donnees_client)
+            except sqlite3.IntegrityError:
+                curseur.close()
+                self.db.close_db()
+                raise ValueError(
+                    f"Valeurs invalides pour la gradation ou le mode.\n"
+                    f"Interruption complète du changement.\n"
+                )
+            
+            # Récupérer tous les résultats
+            lignes_concernees = curseur.rowcount
+            
+            if not lignes_concernees:
+                curseur.close()
+                self.db.close_db()
+                raise ClientNotFound(f"Aucun client avec l'ID {client_id}\n")
 
         # Table 'consignes'
         if planning:
+            curseur.execute("DELETE FROM consignes WHERE client_id = ?", (client_id,))
             list_consignes = planning.setpoints
             for consigne in list_consignes:
-                donnees_client = (client.client_id, consigne.day, consigne.time, 
+                donnees_client = (client_id, consigne.day, consigne.time.isoformat(), 
                                     consigne.temperature, consigne.drawn_volume) 
                 try:
                     curseur.execute("""
@@ -660,7 +657,7 @@ class ClientManager :
                         temperature = excluded.temperature,
                         volume = excluded.volume
                 """, donnees_client)
-                except DatabaseIntegrityError:
+                except sqlite3.IntegrityError:
                     curseur.close()
                     self.db.close_db()
                     raise ValueError(
@@ -679,7 +676,7 @@ class ClientManager :
             profil_json = json.dumps(matrice_numpy.tolist())
 
             # 3. On prépare les données (Notez qu'on utilise profil_json au lieu de puissance)
-            donnees_constraints = (client.client_id,
+            donnees_constraints = (client_id,
                                    constraints.minimum_temperature, 
                                     profil_json)
             try:
@@ -692,7 +689,7 @@ class ClientManager :
                     temperature_minimale = excluded.temperature_minimale,
                     profil_conso_json = excluded.profil_conso_json
             """, donnees_constraints)
-            except DatabaseIntegrityError:
+            except sqlite3.IntegrityError:
                 curseur.close()
                 self.db.close_db()
                 raise ValueError(
@@ -703,17 +700,17 @@ class ClientManager :
             # contraint_id = curseur.lastrowid
             
         # Table 'plages_interdites'
-            curseur.execute("DELETE FROM plages_interdites WHERE client_id = ?", (client.client_id,))
+            curseur.execute("DELETE FROM plages_interdites WHERE client_id = ?", (client_id,))
             list_plages_interdites = constraints.forbidden_slots
             for plage_interdite in list_plages_interdites:
-                donnees_client = (client.client_id, plage_interdite.start, plage_interdite.end)
+                donnees_client = (client_id, plage_interdite.start, plage_interdite.end)
                 try:
                     curseur.execute("""
                     INSERT INTO plages_interdites
                     (client_id, heure_debut, heure_fin)
                     VALUES (?, ?, ?)
                 """, donnees_client)
-                except DatabaseIntegrityError:
+                except sqlite3.IntegrityError:
                     curseur.close()
                     self.db.close_db()
                     raise ValueError(
@@ -724,8 +721,8 @@ class ClientManager :
         # Table 'prices'
         if prices:
             if prices.mode == 'BASE':
-                donnees_client = [(client.client_id, 'base', prices.base),
-                                    (client.client_id, 'revente', prices.resale_price)]
+                donnees_client = [(client_id, 'base', prices.base),
+                                    (client_id, 'revente', prices.resale_price)]
                 try:
                     curseur.executemany("""
                         INSERT INTO prices 
@@ -733,7 +730,7 @@ class ClientManager :
                         VALUES (?, ?, ?) ON CONFLICT(client_id, type) DO UPDATE SET
                         prix = excluded.prix
                     """, donnees_client)
-                except DatabaseIntegrityError:
+                except sqlite3.IntegrityError:
                     curseur.close()
                     self.db.close_db()
                     raise ValueError(
@@ -741,9 +738,9 @@ class ClientManager :
                         f"Interruption complète du changement.\n"
                     )
             elif prices.mode == 'HPHC':
-                donnees_client = [(client.client_id, 'hp', prices.hp),
-                                    (client.client_id, 'hc', prices.hc),
-                                    (client.client_id, 'revente', prices.resale_price)]
+                donnees_client = [(client_id, 'hp', prices.hp),
+                                    (client_id, 'hc', prices.hc),
+                                    (client_id, 'revente', prices.resale_price)]
                 try:
                     curseur.executemany("""
                         INSERT INTO prices 
@@ -753,17 +750,17 @@ class ClientManager :
                     """, donnees_client)
 
         # Table 'creneaux_hp'
-                    curseur.execute("DELETE FROM creneaux_hp WHERE client_id = ?", (client.client_id,))
+                    curseur.execute("DELETE FROM creneaux_hp WHERE client_id = ?", (client_id,))
                     list_creneaux_hp = prices.hp_slots
                     for creneau_hp in list_creneaux_hp:
-                        donnees_client = (client.client_id, creneau_hp.start, creneau_hp.end)
+                        donnees_client = (client_id, creneau_hp.start, creneau_hp.end)
                         try:
                             curseur.executemany("""
                                 INSERT INTO creneaux_hp 
                                 (client_id, heure_debut, heure_fin) 
                                 VALUES (?, ?, ?)
                             """, donnees_client)
-                        except DatabaseIntegrityError:
+                        except sqlite3.IntegrityError:
                             curseur.close()
                             self.db.close_db()
                             raise ValueError(
@@ -771,7 +768,7 @@ class ClientManager :
                                 f"Interruption complète du changement.\n"
                             )
 
-                except DatabaseIntegrityError:
+                except sqlite3.IntegrityError:
                     curseur.close()
                     self.db.close_db()
                     raise ValueError(
@@ -787,10 +784,10 @@ class ClientManager :
                 )
 
         # Table 'water_heaters'
-        if client.water_heater:
-            donnees_client = (client.client_id, client.water_heater.volume, 
-                            client.water_heater.power, client.water_heater.insulation_coefficient, 
-                            client.water_heater.cold_water_temperature)
+        if water_heater:
+            donnees_client = (client_id, water_heater.volume, 
+                            water_heater.power, water_heater.insulation_coefficient, 
+                            water_heater.cold_water_temperature)
             try:
                 curseur.execute("""
                     INSERT INTO water_heaters
@@ -801,7 +798,7 @@ class ClientManager :
                     coeff_isolation = excluded.coeff_isolation,
                     temperature_eau_froide_celsius = excluded.temperature_eau_froide_celsius
                 """, donnees_client)
-            except DatabaseIntegrityError:
+            except sqlite3.IntegrityError:
                 curseur.close()
                 self.db.close_db()
                 raise ValueError(
@@ -832,7 +829,7 @@ class ClientManager :
                 f"Chemin: {self.path_db}\n"
             )         
 
-        print(f"Connecté à la base de données: {self.path_db}")
+        # print(f"Connecté à la base de données: {self.path_db}")
             
         # Configurer pour retourner des dictionnaires
         self.db.connexion.row_factory = sqlite3.Row
