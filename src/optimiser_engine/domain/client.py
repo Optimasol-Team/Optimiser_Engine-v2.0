@@ -280,20 +280,21 @@ class Client :
         # B. Prices
         p_data = {
             "mode": self.prices.mode,
-            "hp_price": self.prices.hp if self.prices.mode == "HPHC" else None,
-            "hc_price": self.prices.hc if self.prices.mode == "HPHC" else None,
-            "base_price": self.prices.base if self.prices.mode == "BASE" else None,
             "resell_price": self.prices.resale_price
         }
-        # Gestion des créneaux HP si mode HPHC
         if self.prices.mode == "HPHC":
+            p_data["hp_price"] = self.prices.hp
+            p_data["hc_price"] = self.prices.hc
             slots = []
             for c in self.prices.hp_slots:
                 slots.append({
                     "start": c.start.strftime("%H:%M"), 
                     "end": c.end.strftime("%H:%M")
                 })
-            p_data["hp_slots"] = slots
+            if slots:
+                p_data["hp_slots"] = slots
+        elif self.prices.mode == "BASE":
+            p_data["base_price"] = self.prices.base
 
         # C. Features
         f_data = {
@@ -303,17 +304,27 @@ class Client :
         }
 
         # D. Constraints
+        cp = getattr(self.constraints, "consumption_profile", None)
+        consumption_profile_data = None
+        background_noise = None
+        if cp is not None:
+            background_noise = getattr(cp, "background_noise", None)
+            matrix = getattr(cp, "data", None)
+            if matrix is not None:
+                consumption_profile_data = np.array(matrix).tolist()
+                if background_noise is not None and np.allclose(matrix, background_noise):
+                    consumption_profile_data = None
+
         c_data = {
             "min_temp": self.constraints.minimum_temperature,
             "forbidden_slots": [
                 {"start": c.start.strftime("%H:%M"), "end": c.end.strftime("%H:%M")}
                 for c in self.constraints.forbidden_slots
-            ]
+            ],
+            "consumption_profile": consumption_profile_data
         }
-        # Note : On ne sérialise pas forcément la matrice géante de consommation 
-        # pour ne pas polluer l'affichage, sauf si nécessaire.
-        # Ici je mets null par défaut pour simplifier.
-        c_data["consumption_profile"] = None 
+        if background_noise is not None:
+            c_data["background_noise"] = background_noise
 
         # E. Planning
         planning_list = []
@@ -333,4 +344,15 @@ class Client :
             "constraints": c_data,
             "planning": planning_list
         }
+
+    def to_yaml(self) -> str:
+        """
+        Serialize the client configuration to a YAML string.
+
+        Returns
+        -------
+        str
+            (texte YAML) YAML-formatted representation of the client.
+        """
+        return yaml.safe_dump(self.to_dict(), sort_keys=False)
     
